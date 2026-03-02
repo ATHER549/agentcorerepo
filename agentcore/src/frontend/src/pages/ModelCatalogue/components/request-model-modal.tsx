@@ -18,10 +18,12 @@ import {
   useTestModelConnection,
 } from "@/controllers/API/queries/models";
 import useAlertStore from "@/stores/alertStore";
+import type { ModelTypeFilter } from "@/types/models/models";
 
 interface RequestModelModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  modelType?: ModelTypeFilter;
 }
 
 interface VisibilityOptions {
@@ -37,10 +39,12 @@ const PROVIDERS = [
   { value: "groq", label: "Groq" },
   { value: "openai_compatible", label: "Custom Model" },
 ];
+const DEFAULT_AZURE_API_VERSION = "2025-10-01-preview";
 
 export default function RequestModelModal({
   open,
   onOpenChange,
+  modelType = "llm",
 }: RequestModelModalProps) {
   const { role } = useContext(AuthContext);
   const normalizedRole = String(role || "").toLowerCase();
@@ -53,6 +57,9 @@ export default function RequestModelModal({
   const [modelName, setModelName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [azureDeployment, setAzureDeployment] = useState("");
+  const [azureApiVersion, setAzureApiVersion] = useState(DEFAULT_AZURE_API_VERSION);
+  const [customHeaders, setCustomHeaders] = useState("");
   const [environment, setEnvironment] = useState<"test" | "uat" | "prod">("test");
   const [visibilityScope, setVisibilityScope] = useState<"private" | "department" | "organization">("private");
   const [deptId, setDeptId] = useState("");
@@ -64,6 +71,9 @@ export default function RequestModelModal({
   const [chargeCode, setChargeCode] = useState("");
   const [projectName, setProjectName] = useState("");
   const [reason, setReason] = useState("");
+  const [temperature, setTemperature] = useState<number | "">(0.7);
+  const [maxTokens, setMaxTokens] = useState<number | "">("");
+  const [dimensions, setDimensions] = useState<number | "">("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const createMutation = usePostRegistryModel();
@@ -75,6 +85,7 @@ export default function RequestModelModal({
     isDevBusinessUser &&
     environment === "test" &&
     visibilityScope === "private";
+  const isEmbedding = modelType === "embedding";
 
   const departmentsForSelectedOrg = useMemo(
     () => visibilityOptions.departments,
@@ -90,12 +101,31 @@ export default function RequestModelModal({
     return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
   }, [departmentsForSelectedOrg, publicDeptIds]);
 
+  const buildProviderConfig = (): Record<string, any> | undefined => {
+    const config: Record<string, any> = {};
+    if (provider === "azure") {
+      if (azureDeployment) config.azure_deployment = azureDeployment;
+      if (azureApiVersion) config.api_version = azureApiVersion;
+    }
+    if (provider === "openai_compatible" && customHeaders) {
+      try {
+        config.custom_headers = JSON.parse(customHeaders);
+      } catch {
+        // Keep submit behavior aligned with add modal: ignore invalid JSON here.
+      }
+    }
+    return Object.keys(config).length ? config : undefined;
+  };
+
   const resetForm = () => {
     setDisplayName("");
     setProvider("openai");
     setModelName("");
     setBaseUrl("");
     setApiKey("");
+    setAzureDeployment("");
+    setAzureApiVersion(DEFAULT_AZURE_API_VERSION);
+    setCustomHeaders("");
     setEnvironment("test");
     setVisibilityScope("private");
     setDeptId("");
@@ -103,6 +133,9 @@ export default function RequestModelModal({
     setChargeCode("");
     setProjectName("");
     setReason("");
+    setTemperature(0.7);
+    setMaxTokens("");
+    setDimensions("");
   };
 
   useEffect(() => {
@@ -147,6 +180,8 @@ export default function RequestModelModal({
         model_name: modelName,
         base_url: baseUrl || null,
         api_key: apiKey || null,
+        provider_config: buildProviderConfig() ?? null,
+        isEmbedding,
       });
       if (result.success) {
         setSuccessData({
@@ -194,7 +229,7 @@ export default function RequestModelModal({
         description: reason,
         provider,
         model_name: modelName,
-        model_type: "llm",
+        model_type: isEmbedding ? "embedding" : "llm",
         base_url: baseUrl || null,
         api_key: apiKey || null,
         environment,
@@ -203,12 +238,21 @@ export default function RequestModelModal({
         dept_id: visibilityScope === "department" ? (canMultiDept ? null : deptId || null) : null,
         public_dept_ids: visibilityScope === "department" ? (canMultiDept ? publicDeptIds : deptId ? [deptId] : []) : [],
         provider_config: {
+          ...(buildProviderConfig() ?? {}),
           request_meta: {
             charge_code: chargeCode,
             project_name: projectName,
             reason,
           },
         },
+        default_params: isEmbedding
+          ? dimensions !== ""
+            ? { dimensions: Number(dimensions) }
+            : null
+          : {
+              ...(temperature !== "" ? { temperature: Number(temperature) } : {}),
+              ...(maxTokens !== "" ? { max_tokens: Number(maxTokens) } : {}),
+            },
         is_active: true,
       });
       setSuccessData({
@@ -287,14 +331,56 @@ export default function RequestModelModal({
                 />
               </div>
               <div>
-                <Label>Base URL</Label>
+                <Label>
+                  Base URL
+                  {(provider === "azure" || provider === "openai_compatible") && " *"}
+                </Label>
                 <Input
-                  placeholder="https://api.example.com/v1"
+                  required={provider === "azure" || provider === "openai_compatible"}
+                  placeholder={
+                    provider === "azure"
+                      ? "https://your-resource.openai.azure.com/"
+                      : "https://api.example.com/v1"
+                  }
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                 />
               </div>
             </div>
+
+            {provider === "azure" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Deployment Name *</Label>
+                  <Input
+                    required
+                    placeholder="my-gpt4-deployment"
+                    value={azureDeployment}
+                    onChange={(e) => setAzureDeployment(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label>API Version</Label>
+                  <Input
+                    placeholder="2025-10-01-preview"
+                    value={azureApiVersion}
+                    onChange={(e) => setAzureApiVersion(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {provider === "openai_compatible" && (
+              <div>
+                <Label>Custom Headers (JSON)</Label>
+                <Textarea
+                  rows={3}
+                  placeholder='{"X-Custom-Header": "value"}'
+                  value={customHeaders}
+                  onChange={(e) => setCustomHeaders(e.target.value)}
+                />
+              </div>
+            )}
 
             <div>
               <Label>API Key *</Label>
@@ -332,6 +418,59 @@ export default function RequestModelModal({
                   </button>
                 ))}
               </div>
+            </div>
+          </fieldset>
+
+          <fieldset className="space-y-4">
+            <legend className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              {isEmbedding ? "Embedding Parameters" : "Default Parameters"}
+            </legend>
+            <div className="grid grid-cols-2 gap-4">
+              {!isEmbedding && (
+                <>
+                  <div>
+                    <Label>Temperature (0-2)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="2"
+                      placeholder="0.7"
+                      value={temperature}
+                      onChange={(e) =>
+                        setTemperature(e.target.value ? Number(e.target.value) : "")
+                      }
+                    />
+                  </div>
+                  <div>
+                    <Label>Max Output Tokens</Label>
+                    <Input
+                      type="number"
+                      placeholder="4096"
+                      value={maxTokens}
+                      onChange={(e) =>
+                        setMaxTokens(e.target.value ? Number(e.target.value) : "")
+                      }
+                    />
+                  </div>
+                </>
+              )}
+              {isEmbedding && (
+                <div>
+                  <Label>Dimensions</Label>
+                  <Input
+                    type="number"
+                    placeholder="e.g., 1536"
+                    value={dimensions}
+                    onChange={(e) =>
+                      setDimensions(e.target.value ? Number(e.target.value) : "")
+                    }
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Leave empty to use the model's default dimension.
+                  </p>
+                </div>
+              )}
             </div>
           </fieldset>
 

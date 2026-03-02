@@ -196,8 +196,12 @@ export default function ModelCatalogue(): JSX.Element {
       setSuccessData({
         title: t("Model \"{{name}}\" deleted.", { name: deleteConfirmModel.display_name }),
       });
-    } catch {
-      setErrorData({ title: t("Failed to delete model.") });
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.detail ||
+        err?.message ||
+        t("You do not have permission to delete this model.");
+      setErrorData({ title: t("Failed to delete model."), list: [detail] });
     }
     setDeleteConfirmModel(null);
   };
@@ -252,7 +256,7 @@ export default function ModelCatalogue(): JSX.Element {
           ) : canRequestModel ? (
             <Button onClick={() => setIsRequestModalOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
-              {t("Add / Request Model")}
+              {modelTypeFilter === "embedding" ? t("Add / Request Embedding") : t("Add / Request Model")}
             </Button>
           ) : null}
         </div>
@@ -579,6 +583,7 @@ export default function ModelCatalogue(): JSX.Element {
       <RequestModelModal
         open={isRequestModalOpen}
         onOpenChange={setIsRequestModalOpen}
+        modelType={modelTypeFilter}
       />
 
       {/* Delete Confirmation Dialog */}

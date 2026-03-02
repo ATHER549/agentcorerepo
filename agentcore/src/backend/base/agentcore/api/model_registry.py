@@ -264,6 +264,51 @@ def _can_access_model(
     return False
 
 
+def _is_department_scoped_model(row: ModelRegistry, dept_pairs: list[tuple[UUID, UUID]]) -> bool:
+    user_dept_ids = {str(dept_id) for _, dept_id in dept_pairs}
+    model_dept_ids = {str(v) for v in (getattr(row, "public_dept_ids", None) or [])}
+    if row.dept_id:
+        model_dept_ids.add(str(row.dept_id))
+    return bool(model_dept_ids.intersection(user_dept_ids))
+
+
+def _can_delete_model(
+    row: ModelRegistry,
+    current_user: CurrentActiveUser,
+    *,
+    org_ids: set[UUID],
+    dept_pairs: list[tuple[UUID, UUID]],
+) -> bool:
+    if _is_root_user(current_user):
+        return True
+
+    normalized_roles = _normalize_role_variants(getattr(current_user, "role", ""))
+    user_id = str(current_user.id)
+    is_creator = str(getattr(row, "created_by_id", "") or "") == user_id
+
+    # Global rule: the creator can delete their own model.
+    if is_creator:
+        return True
+
+    # Developer/Business User: creator-only delete.
+    if normalized_roles.intersection({"developer", "business_user"}):
+        return False
+
+    # Department Admin:
+    # - can delete models approved by self
+    # - can delete models in their department scope
+    if normalized_roles.intersection({"department_admin", "dept_admin", "departmentadmin", "deptadmin"}):
+        if str(getattr(row, "reviewed_by", "") or "") == user_id:
+            return True
+        return _is_department_scoped_model(row, dept_pairs)
+
+    # Super Admin: can delete any model within their org scope.
+    if normalized_roles.intersection({"super_admin", "superadmin"}):
+        return bool(row.org_id and row.org_id in org_ids)
+
+    return False
+
+
 async def _create_model_approval_request(
     session: DbSession,
     *,
@@ -809,22 +854,53 @@ async def delete_registry_model(
     session: DbSession,
     current_user: CurrentActiveUser,
 ):
-    await _require_any_permission(current_user, {"retire_model", "add_new_model"})
+    allowed_roles = {
+        "root",
+        "root_admin",
+        "super_admin",
+        "superadmin",
+        "department_admin",
+        "departmentadmin",
+        "dept_admin",
+        "deptadmin",
+        "developer",
+        "business_user",
+    }
+    if not _normalize_role_variants(getattr(current_user, "role", "")).intersection(allowed_roles):
+        raise HTTPException(status_code=403, detail="Your role is not allowed to delete models")
+
     row = await session.get(ModelRegistry, model_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Model not found")
+
+    org_ids, dept_pairs = await _get_scope_memberships(session, current_user.id)
+    if not _can_delete_model(row, current_user, org_ids=org_ids, dept_pairs=dept_pairs):
+        raise HTTPException(status_code=403, detail="You are not allowed to delete this model")
+
+    approval_rows = (
+        await session.exec(select(ModelApprovalRequest).where(ModelApprovalRequest.model_id == model_id))
+    ).all()
+    for req in approval_rows:
+        await session.delete(req)
+
+    audit_rows = (
+        await session.exec(select(ModelAuditLog).where(ModelAuditLog.model_id == model_id))
+    ).all()
+    for audit in audit_rows:
+        audit.model_id = None
+        session.add(audit)
+
     await _append_audit(
         session,
-        model_id=model_id,
+        model_id=None,
         actor_id=current_user.id,
         action="model.deleted",
         org_id=row.org_id,
         dept_id=row.dept_id,
+        details={"deleted_model_id": str(model_id)},
         message="Model deleted",
     )
-    deleted = await model_registry_service.delete_model(session, model_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Model not found")
+    await session.delete(row)
     await session.commit()
 
 
