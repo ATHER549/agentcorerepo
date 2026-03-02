@@ -48,17 +48,18 @@ rails:
 };
 
 const getPromptsTemplate = (): string => {
-  return `- task: self_check_input
-  content: |
-    You are a safety classifier for user input.
+  return `prompts:
+  - task: self_check_input
+    content: |
+      You are a safety classifier for user input.
 
-    Block the message if it requests harmful, illegal, abusive, or violent guidance.
+      Block the message if it requests harmful, illegal, abusive, or violent guidance.
 
-    User message: "{{ user_input }}"
+      User message: "{{ user_input }}"
 
-    Should this message be blocked?
-    Answer only Yes or No.
-    Answer:`;
+      Should this message be blocked?
+      Answer only Yes or No.
+      Answer:`;
 };
 
 const pickFirstString = (

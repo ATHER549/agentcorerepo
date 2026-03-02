@@ -301,7 +301,18 @@ def _validate_runtime_config_shape(payload: GuardrailPayload) -> None:
     if not isinstance(runtime_config, dict):
         raise HTTPException(status_code=400, detail="runtimeConfig must be a JSON object")
 
-    for key in ("config_yml", "configYml", "config.yml", "rails_co", "railsCo", "rails.co", "prompts_yml"):
+    for key in (
+        "config_yml",
+        "configYml",
+        "config.yml",
+        "rails_co",
+        "railsCo",
+        "rails.co",
+        "rails_yml",
+        "railsYml",
+        "rails.yml",
+        "prompts_yml",
+    ):
         if key not in runtime_config:
             continue
         value = runtime_config.get(key)
@@ -338,7 +349,10 @@ def _normalize_runtime_config_payload(runtime_config: dict[str, Any] | None) -> 
         return None
 
     config_yml = _extract_runtime_string(runtime_config, ("config_yml", "configYml", "config.yml"))
-    rails_co = _extract_runtime_string(runtime_config, ("rails_co", "railsCo", "rails.co"))
+    rails_co = _extract_runtime_string(
+        runtime_config,
+        ("rails_co", "railsCo", "rails.co", "rails_yml", "railsYml", "rails.yml"),
+    )
     prompts_yml = _extract_runtime_string(runtime_config, ("prompts_yml", "promptsYml", "prompts.yml"))
     files = runtime_config.get("files")
 

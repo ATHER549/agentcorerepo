@@ -133,7 +133,7 @@ def _normalize_runtime_config(runtime_config: dict[str, Any] | None) -> dict[str
         raise ValueError(msg)
 
     config_yml = _extract_first_str(runtime_config, ("config_yml", "configYml", "config.yml"))
-    rails_co = _extract_first_str(runtime_config, ("rails_co", "railsCo", "rails.co"))
+    rails_co = _extract_first_str(runtime_config, ("rails_co", "railsCo", "rails.co", "rails_yml", "railsYml", "rails.yml"))
     prompts_yml = _extract_first_str(runtime_config, ("prompts_yml", "promptsYml", "prompts.yml"))
     extra_files = runtime_config.get("files", {})
 
@@ -195,6 +195,38 @@ _PROVIDER_ENGINE_MAPPING = {
     "groq": "groq",
     "openai_compatible": "openai",
 }
+
+
+def _coerce_temperature(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _should_strip_temperature_for_model(
+    provider: str | None,
+    model_name: str | None,
+    temperature: Any,
+) -> bool:
+    provider_normalized = (provider or "").strip().lower()
+    model_normalized = (model_name or "").strip().lower()
+    temp_value = _coerce_temperature(temperature)
+
+    if provider_normalized not in {"openai", "azure", "openai_compatible"}:
+        return False
+    if temp_value is None or temp_value == 1.0:
+        return False
+
+    # Azure/OpenAI reasoning-like models reject custom temperature values.
+    # In practice this includes o1/o3 and gpt-5 variants (including *-chat deployments).
+    return (
+        model_normalized.startswith("o1")
+        or model_normalized.startswith("o3")
+        or model_normalized.startswith("gpt-5")
+    )
 
 def _map_registry_provider_to_nemo_engine(provider: str) -> str:
     normalized = (provider or "").strip().lower()
@@ -324,6 +356,17 @@ def _build_model_parameters(model_config: dict[str, Any]) -> tuple[str, str, dic
             k: v for k, v in normalized_default_params.items()
             if k not in {"model", "model_name", "engine", "api_key", "base_url"}
         })
+
+    if "temperature" in params and _should_strip_temperature_for_model(
+        provider=provider,
+        model_name=model_name,
+        temperature=params.get("temperature"),
+    ):
+        stripped_temp = params.pop("temperature", None)
+        logger.info(
+            "NeMo model parameters adjusted: removed unsupported temperature "
+            f"for provider={provider}, model={model_name}, temperature={stripped_temp}"
+        )
 
     logger.info(
         "NeMo model parameters built: "
@@ -554,6 +597,7 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
         from nemoguardrails.library.content_safety import actions as content_safety_actions
         from nemoguardrails.library.self_check.input_check import actions as self_check_input_actions
         from nemoguardrails.library.self_check.output_check import actions as self_check_output_actions
+        from nemoguardrails.library.topic_safety import actions as topic_safety_actions
     except ImportError as exc:
         msg = "nemoguardrails is not installed. Install it before enabling the NeMo guardrail component."
         logger.exception(msg)
@@ -585,6 +629,23 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                 elif provider in {"groq"}:
                     params.pop("stream_usage", None)
 
+                resolved_model_name = (
+                    model_name
+                    or getattr(llm, "model", None)
+                    or getattr(llm, "model_name", None)
+                    or ""
+                )
+                if _should_strip_temperature_for_model(
+                    provider=provider,
+                    model_name=str(resolved_model_name),
+                    temperature=params.get("temperature"),
+                ):
+                    stripped_temp = params.pop("temperature", None)
+                    logger.info(
+                        "NeMo llm_call adjusted: removed unsupported temperature "
+                        f"for provider={provider}, model={resolved_model_name}, temperature={stripped_temp}"
+                    )
+
             return await original_llm_call(
                 llm=llm,
                 prompt=prompt,
@@ -601,6 +662,7 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
         content_safety_actions.llm_call = _compat_llm_call
         self_check_input_actions.llm_call = _compat_llm_call
         self_check_output_actions.llm_call = _compat_llm_call
+        topic_safety_actions.llm_call = _compat_llm_call
 
     rails_config = RailsConfig.from_path(str(config_dir))
     logger.info(f"NeMo rails config loaded from path: config_dir={config_dir}")
@@ -883,11 +945,24 @@ def _is_input_rail_blocked(activated_rails: list[dict[str, Any]]) -> tuple[bool,
 
 
 def _classify_action(input_text: str, output_text: str, blocked_by_input_rail: bool) -> str:
+    input_text_norm = (input_text or "").strip()
+    output_text_norm = (output_text or "").strip()
+
     if blocked_by_input_rail:
-        return "blocked"
-    if not output_text.strip():
+        # Some NeMo flows can mark input rails as "stop" in logs while still returning
+        # the original input unchanged. Treat that case as passthrough to avoid false blocks.
+        if not output_text_norm:
+            return "blocked"
+        if output_text_norm != input_text_norm:
+            return "blocked"
+        logger.warning(
+            "NeMo input rail marked as blocked but output matched input; treating as passthrough."
+        )
         return "passthrough"
-    if output_text.strip() == input_text.strip():
+
+    if not output_text_norm:
+        return "passthrough"
+    if output_text_norm == input_text_norm:
         return "passthrough"
     return "rewritten"
 
