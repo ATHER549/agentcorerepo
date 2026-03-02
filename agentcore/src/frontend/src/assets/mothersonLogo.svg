@@ -1,0 +1,32 @@
+
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 72.7 81"
+  xml:space="preserve"
+>
+  <style>
+    .bar {
+      fill-rule: evenodd;
+      clip-rule: evenodd;
+      fill: #DA2020;
+    }
+  </style>
+
+  <!-- RIGHT BAR -->
+  <path
+    class="bar bar3"
+    d="M58.6,5.6c-3.7,1.6-6.1,5.2-6.1,9.2V81h14.1c3.4,0,6.1-2.7,6.1-6.1V0L58.6,5.6z"
+  />
+
+  <!-- MIDDLE BAR -->
+  <path
+    class="bar bar2"
+    d="M32.3,26c-3.7,1.6-6.1,5.2-6.1,9.2V81h14.1c3.4,0,6.1-2.7,6.1-6.1V20.2L32.3,26z"
+  />
+
+  <!-- LEFT BAR -->
+  <path
+    class="bar bar1"
+    d="M6.1,46.1C2.4,47.8,0,51.3,0,55.3V81h14.1c3.4,0,6.1-2.7,6.1-6.1V40.5L6.1,46.1z"
+  />
+</svg>

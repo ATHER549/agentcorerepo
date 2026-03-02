@@ -1,0 +1,89 @@
+# https://github.com/dorny/paths-filter
+python:
+  - "src/backend/**"
+  - "src/backend/**.py"
+  - "pyproject.toml"
+  - "uv.lock"
+  - "src/backend/base/pyproject.toml"
+  - "src/backend/base/uv.lock"
+  - "**/python_test.yml"
+components-changes:
+  - "src/backend/base/agentcore/components/**"
+starter-projects-changes:
+  - "src/backend/base/agentcore/initial_setup/**"
+frontend-tests:
+  - "src/frontend/tests/**"
+frontend:
+  - "src/frontend/**"
+  - "**/typescript_test.yml"
+  - "**/jest_test.yml"
+docs:
+  - "docs/**"
+
+# Test categories and their associated paths
+starter-projects:
+  - "src/backend/base/agentcore/initial_setup/**"
+  - "src/backend/base/agentcore/components/**"
+  - "src/backend/base/agentcore/services/**"
+  - "src/backend/base/agentcore/custom/**"
+  - "src/backend/base/agentcore/api/v1/chat.py"
+  - "src/frontend/src/pages/MainPage/**"
+  - "src/frontend/src/utils/reactflowUtils.ts"
+  - "src/frontend/tests/extended/features/**"
+  - "src/backend/base/agentcore/custom/**"
+  - "src/backend/base/agentcore/graph/**"
+
+components:
+  - "src/frontend/src/components/**"
+  - "src/frontend/src/modals/**"
+  - "src/frontend/src/pages/FlowPage/**"
+  - "src/frontend/src/shared/**"
+  - "src/frontend/src/hooks/**"
+  - "src/frontend/src/CustomNodes/**"
+  - "src/frontend/src/style/**"
+  - "src/frontend/src/utils/styleUtils.ts"
+  - "src/frontend/tests/core/features/**"
+  - "src/frontend/tests/core/integrations/**"
+  - "src/frontend/tests/core/regression/**"
+  - "src/frontend/tests/extended/integrations/**"
+  - "src/frontend/tests/extended/features/**"
+  - "src/frontend/tests/extended/regression/**"
+  - "src/backend/base/agentcore/custom/**"
+  - "src/backend/base/agentcore/schema/**"
+  - "src/backend/base/agentcore/graph/**"
+  - "src/backend/base/agentcore/utils/**"
+  - "src/backend/base/agentcore/custom/**"
+  - "src/backend/base/agentcore/components/**"
+  - "src/backend/base/agentcore/initial_setup/**"
+  - "src/backend/base/agentcore/serialization/**"
+
+workspace:
+  - "src/backend/base/agentcore/inputs/**"
+  - "src/frontend/src/components/core/parameterRenderComponent/**"
+  - "src/frontend/src/CustomNodes/**"
+  - "src/frontend/src/modals/**"
+  - "src/frontend/src/style/**"
+  - "src/frontend/src/CustomEdges/**"
+  - "src/frontend/src/utils/reactflowUtils.ts"
+  - "src/frontend/src/utils/buildUtils.ts"
+  - "src/frontend/tests/core/features/**"
+  - "src/frontend/tests/core/unit/**"
+  - "src/frontend/tests/extended/features/**"
+  - "src/frontend/tests/core/regression/**"
+
+api:
+  - "src/backend/base/agentcore/api/**"
+  - "src/frontend/src/controllers/**"
+  - "src/frontend/tests/core/features/**"
+  - "src/frontend/tests/extended/features/**"
+  - "src/frontend/tests/extended/regression/**"
+
+database:
+  - "src/backend/base/agentcore/services/database/**"
+  - "src/backend/base/agentcore/alembic/**"
+  - "src/frontend/src/controllers/**"
+  - "src/frontend/tests/core/features/**"
+  - "src/frontend/tests/extended/features/**"
+
+mainpage:
+  - "src/frontend/src/pages/MainPage/**"
