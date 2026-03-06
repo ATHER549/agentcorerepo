@@ -401,59 +401,6 @@ def _map_registry_provider_to_nemo_engine(provider: str) -> str:
     return engine
 
 
-def _normalize_default_params_for_provider(provider: str, default_params: dict[str, Any]) -> dict[str, Any]:
-    """Normalize default_params to use provider-specific parameter names.
-    
-    Different providers expect different parameter names:
-    - OpenAI/Azure/Anthropic/Groq/OpenAI-compatible: max_tokens
-    - Google: max_output_tokens
-    
-    Some models (like Azure o1-preview, o1-mini) don't support max_tokens at all.
-    
-    This function ensures parameters from the model registry are properly
-    translated to what each provider expects, and removes unsupported parameters.
-    """
-    if not isinstance(default_params, dict) or not default_params:
-        return {}
-    
-    if not provider or not isinstance(provider, str):
-        logger.warning(f"Invalid provider type for normalization: {type(provider)}")
-        return {}
-    
-    normalized = dict(default_params)
-    provider_lower = provider.strip().lower()
-    
-    # Google uses max_output_tokens, others use max_tokens
-    if provider_lower == "google":
-        # Convert max_tokens -> max_output_tokens for Google
-        if "max_tokens" in normalized and "max_output_tokens" not in normalized:
-            normalized["max_output_tokens"] = normalized.pop("max_tokens")
-    else:
-        # Convert max_output_tokens -> max_tokens for non-Google providers
-        if "max_output_tokens" in normalized and "max_tokens" not in normalized:
-            normalized["max_tokens"] = normalized.pop("max_output_tokens")
-    
-    # Remove None, empty string, or zero values for token limits
-    # This allows models that don't support max_tokens to work without errors
-    for token_param in ["max_tokens", "max_output_tokens"]:
-        if token_param in normalized:
-            value = normalized[token_param]
-            if value is None or value == "" or (isinstance(value, (int, float)) and value <= 0):
-                normalized.pop(token_param, None)
-    
-    # Remove parameters that NeMo or providers might reject
-    # stream_usage is problematic for Groq/Google (already handled in compatibility shim)
-    # Remove any provider-specific auth params that should come from model_config
-    params_to_exclude = {
-        "api_key", "openai_api_key", "anthropic_api_key", "google_api_key", "groq_api_key",
-        "base_url", "openai_api_base", "groq_api_base", "azure_endpoint",
-        "deployment_name", "azure_deployment", "openai_api_version", "api_version",
-    }
-    for key in params_to_exclude:
-        normalized.pop(key, None)
-    
-    return normalized
-
 
 def _build_model_parameters(model_config: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     provider = str(model_config.get("provider", "")).strip().lower()
@@ -472,9 +419,6 @@ def _build_model_parameters(model_config: dict[str, Any]) -> tuple[str, str, dic
 
     engine = _map_registry_provider_to_nemo_engine(provider)
     params: dict[str, Any] = {}
-
-    # Normalize default_params to handle provider-specific parameter names
-    normalized_default_params = _normalize_default_params_for_provider(provider, default_params)
 
     if provider == "openai":
         if api_key:
@@ -513,29 +457,23 @@ def _build_model_parameters(model_config: dict[str, Any]) -> tuple[str, str, dic
         if isinstance(custom_headers, dict) and custom_headers:
             params["default_headers"] = custom_headers
 
-    # Merge normalized default_params, excluding provider-agnostic keys
-    if normalized_default_params:
+    # Merge additional default params from the model registry, excluding
+    # provider-specific auth/connection keys already set above.
+    if isinstance(default_params, dict):
         params.update({
-            k: v for k, v in normalized_default_params.items()
-            if k not in {"model", "model_name", "engine", "api_key", "base_url"}
+            k: v for k, v in default_params.items()
+            if k not in {
+                "model", "model_name", "engine", "api_key", "base_url",
+                "openai_api_key", "anthropic_api_key", "google_api_key", "groq_api_key",
+                "openai_api_base", "groq_api_base", "azure_endpoint",
+                "deployment_name", "azure_deployment", "openai_api_version", "api_version",
+            }
         })
-
-    if "temperature" in params and _should_strip_temperature_for_model(
-        provider=provider,
-        model_name=model_name,
-        temperature=params.get("temperature"),
-    ):
-        stripped_temp = params.pop("temperature", None)
-        logger.info(
-            "NeMo model parameters adjusted: removed unsupported temperature "
-            f"for provider={provider}, model={model_name}, temperature={stripped_temp}"
-        )
 
     logger.info(
         "NeMo model parameters built: "
         f"provider={provider}, engine={engine}, model={model_name}, has_base_url={bool(base_url)}, "
-        f"default_params_count={len(default_params) if isinstance(default_params, dict) else 0}, "
-        f"normalized_params_count={len(normalized_default_params)}, final_params_keys={sorted(params.keys())}"
+        f"final_params_keys={sorted(params.keys())}"
     )
     return engine, model_name, params
 
@@ -570,25 +508,6 @@ def _build_effective_runtime_config(
             model_type = str(item.get("type", "")).strip().lower()
             if model_type != "main":
                 preserved_models.append(item)
-
-    # NeMo topic/content safety actions resolve model instances from `llms`,
-    # and `llms` intentionally excludes model type "main". Ensure at least one
-    # non-main, non-embedding model exists so safety flows can reference it.
-    _EXCLUDED_LLM_TYPES = {"main", "embeddings", "jailbreak_detection"}
-    has_usable_safety_model = any(
-        str(item.get("type", "")).strip().lower() not in _EXCLUDED_LLM_TYPES
-        for item in preserved_models
-        if isinstance(item, dict)
-    )
-    if not has_usable_safety_model:
-        safety_model_block = {
-            "type": "agentcore_safety",
-            "engine": engine,
-            "model": model_name,
-        }
-        if params:
-            safety_model_block["parameters"] = dict(params)
-        preserved_models.insert(0, safety_model_block)
 
     parsed["models"] = [model_block, *preserved_models]
 
@@ -627,115 +546,11 @@ def _materialize_config(runtime_config: dict[str, Any]) -> Path:
     config_dir = Path(tempfile.mkdtemp(prefix="agentcore_nemo_guardrails_"))
     logger.info(f"NeMo runtime config materialization started: config_dir={config_dir}")
 
-    # NeMo topic/content safety flows require a $model=<type> qualifier that references
-    # a named model in config.yml's `models:` list.  Users often omit this qualifier, so
-    # we auto-detect the model type and inject it consistently into both config.yml and
-    # prompts.yml before writing to disk.
-    _SAFETY_FLOW_IDS = frozenset(
-        {
-            "topic safety check input",
-            "topic safety check output",
-            "content safety check input",
-            "content safety check output",
-        }
-    )
-    _MODEL_QUALIFIER_TASKS = frozenset(
-        {
-            "topic_safety_check_input",
-            "topic_safety_check_output",
-            "content_safety_check_input",
-            "content_safety_check_output",
-        }
-    )
-
-    # --- Step 1: patch config.yml flows ---
-    config_yml_str = runtime_config["config_yml"]
-    _resolved_safety_model: str = "main"  # fallback; updated if we can parse config
-    try:
-        _config_parsed = yaml.safe_load(config_yml_str)
-        if isinstance(_config_parsed, dict):
-            # Determine which model type to use for safety flows.
-            # Prefer a dedicated non-main LLM type (especially agentcore_safety).
-            _models_list = _config_parsed.get("models") or []
-            _safety_model_type = "main"
-            if isinstance(_models_list, list):
-                _preferred_type = None
-                for _m in _models_list:
-                    if isinstance(_m, dict):
-                        _t = (_m.get("type") or "").strip()
-                        _t_lower = _t.lower()
-                        if _t_lower == "agentcore_safety":
-                            _preferred_type = _t
-                            break
-                        if _t and _t_lower not in {"main", "embeddings", "jailbreak_detection"}:
-                            _preferred_type = _preferred_type or _t
-                if _preferred_type:
-                    _safety_model_type = _preferred_type
-            _resolved_safety_model = _safety_model_type
-
-            # Inject $model=<type> into any safety flow that is missing the qualifier.
-            _rails = _config_parsed.get("rails") or {}
-            _config_changed = False
-            for _section in ("input", "output"):
-                _sect = _rails.get(_section) or {}
-                if not isinstance(_sect, dict):
-                    continue
-                _flows = _sect.get("flows") or []
-                if not isinstance(_flows, list):
-                    continue
-                for _i, _flow in enumerate(_flows):
-                    if not isinstance(_flow, str):
-                        continue
-                    _base_flow = _flow.split("$model=")[0].strip()
-                    if _base_flow in _SAFETY_FLOW_IDS and "$model=" not in _flow:
-                        _flows[_i] = f"{_base_flow} $model={_safety_model_type}"
-                        _config_changed = True
-
-            if _config_changed:
-                config_yml_str = yaml.dump(_config_parsed, default_flow_style=False, allow_unicode=True)
-                logger.info(
-                    f"NeMo config_yml: auto-injected '$model={_safety_model_type}' "
-                    "into topic/content safety flows for NeMo compatibility."
-                )
-    except Exception:  # noqa: BLE001
-        pass  # Let NeMo surface its own parse error with better context
-
-    _write_safe_file(config_dir, "config.yml", config_yml_str)
+    _write_safe_file(config_dir, "config.yml", runtime_config["config_yml"])
     _write_safe_file(config_dir, "rails.co", runtime_config["rails_co"])
 
-    # --- Step 2: patch prompts.yml ---
     prompts_yml = runtime_config.get("prompts_yml")
     if isinstance(prompts_yml, str) and prompts_yml.strip():
-        try:
-            _parsed_prompts = yaml.safe_load(prompts_yml)
-            # Wrap bare list → {"prompts": [...]}
-            if isinstance(_parsed_prompts, list):
-                _parsed_prompts = {"prompts": _parsed_prompts}
-                logger.info(
-                    "NeMo prompts_yml was a bare YAML list; "
-                    "auto-wrapped under 'prompts:' key for NeMo compatibility."
-                )
-            # Append " $model=<type>" to topic/content safety task names that are
-            # missing the model qualifier, using the same type resolved from config.yml.
-            if isinstance(_parsed_prompts, dict):
-                _prompt_list = _parsed_prompts.get("prompts")
-                if isinstance(_prompt_list, list):
-                    _prompts_changed = False
-                    for _p in _prompt_list:
-                        if isinstance(_p, dict):
-                            _task = _p.get("task", "")
-                            _base_task = _task.split(" $model=")[0].strip()
-                            if _base_task in _MODEL_QUALIFIER_TASKS and "$model=" not in _task:
-                                _p["task"] = f"{_base_task} $model={_resolved_safety_model}"
-                                _prompts_changed = True
-                    if _prompts_changed:
-                        logger.info(
-                            f"NeMo prompts_yml: auto-appended '$model={_resolved_safety_model}' "
-                            "to topic/content safety task names for NeMo compatibility."
-                        )
-                prompts_yml = yaml.dump(_parsed_prompts, default_flow_style=False, allow_unicode=True)
-        except Exception:  # noqa: BLE001
-            pass  # Let NeMo surface its own parse error with better context
         _write_safe_file(config_dir, "prompts.yml", prompts_yml)
 
     for relative_path, content in runtime_config.get("files", {}).items():
