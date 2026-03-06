@@ -790,6 +790,12 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                 model_name
                 or getattr(llm, "model", None)
                 or getattr(llm, "model_name", None)
+                # AzureChatOpenAI: model and model_name are None; the deployment
+                # name is stored in deployment_name (alias: azure_deployment).
+                # Without this, resolved_model_name is always '' for Azure and
+                # _should_strip_temperature_for_model never fires proactively.
+                or getattr(llm, "deployment_name", None)
+                or getattr(llm, "azure_deployment", None)
                 or ""
             )
 
@@ -847,7 +853,7 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     )
 
             try:
-                return await original_llm_call(
+                response = await original_llm_call(
                     llm=llm,
                     prompt=prompt,
                     model_name=model_name,
@@ -856,6 +862,12 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     custom_callback_handlers=custom_callback_handlers,
                     llm_params=params,
                 )
+                logger.debug(
+                    "NeMo llm_call succeeded: "
+                    f"provider={provider}, model={resolved_model_name}, "
+                    f"response_preview={str(response)[:80]!r}"
+                )
+                return response
             except Exception as exc:  # noqa: BLE001
                 error_str = str(exc)
                 # Build fallback params only when params is a dict.  When
@@ -877,15 +889,29 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     f"provider={provider}, model={resolved_model_name}, changes={changes}"
                 )
 
-                return await original_llm_call(
-                    llm=fallback_llm,
-                    prompt=prompt,
-                    model_name=model_name,
-                    model_provider=model_provider,
-                    stop=stop,
-                    custom_callback_handlers=custom_callback_handlers,
-                    llm_params=fallback_params,
-                )
+                try:
+                    response = await original_llm_call(
+                        llm=fallback_llm,
+                        prompt=prompt,
+                        model_name=model_name,
+                        model_provider=model_provider,
+                        stop=stop,
+                        custom_callback_handlers=custom_callback_handlers,
+                        llm_params=fallback_params,
+                    )
+                    logger.info(
+                        "NeMo llm_call retry succeeded: "
+                        f"provider={provider}, model={resolved_model_name}, "
+                        f"response_preview={str(response)[:80]!r}"
+                    )
+                    return response
+                except Exception as retry_exc:
+                    logger.error(
+                        "NeMo llm_call retry also failed: "
+                        f"provider={provider}, model={resolved_model_name}, "
+                        f"original_changes={changes}, retry_error={retry_exc!r}"
+                    )
+                    raise
 
         setattr(_compat_llm_call, "_agentcore_compat_patched", True)
         llm_utils.llm_call = _compat_llm_call
