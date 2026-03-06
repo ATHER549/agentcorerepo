@@ -335,8 +335,12 @@ def _rebuild_llm_with_fallback_from_error(llm: Any, error_text: str) -> tuple[An
         )
         if is_temp_error and hasattr(llm, "model_copy"):
             try:
-                rebuilt = llm.model_copy(update={"temperature": 1.0})
-                return rebuilt, ["llm:temperature->1.0"]
+                # Use temperature=None so _default_params (exclude_if_none)
+                # omits temperature entirely from the API payload.  Passing
+                # explicit 1.0 can also be rejected by models that only accept
+                # the implicit default temperature.
+                rebuilt = llm.model_copy(update={"temperature": None})
+                return rebuilt, ["llm:temperature->None"]
             except Exception:  # noqa: BLE001
                 pass
         return llm, []
@@ -826,18 +830,18 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     model_name=str(resolved_model_name),
                     temperature=params.get("temperature"),
                 ):
-                    original_temp = params.get("temperature")
-                    # Replace NeMo's unsupported temperature with 1.0 (the only
-                    # accepted value for models such as gpt-5.x, o1, o3).
-                    # Crucially this must be a REPLACEMENT, not a removal:
-                    # if we just pop temperature, llm.bind(**params) is called
-                    # without a temperature override, so the LLM object's own
-                    # default (e.g. 0.7 from LangChain) is used instead — which
-                    # Azure also rejects.  Setting 1.0 here forces
-                    # llm.bind(temperature=1.0, ...) and overrides that default.
-                    params["temperature"] = 1.0
+                    original_temp = params.pop("temperature", None)
+                    # Remove NeMo's unsupported temperature from llm_params so
+                    # it is NOT passed via llm.bind(**params).
+                    # LangChain's AzureChatOpenAI defaults temperature=None, and
+                    # _default_params uses exclude_if_none — so when temperature
+                    # is absent from both llm_params and the LLM object's own
+                    # fields, the Azure API receives NO temperature parameter at
+                    # all and uses its own default (1.0 for gpt-5.x).  Passing
+                    # any explicit value — even 1.0 — may still be rejected by
+                    # models that only accept the implicit default.
                     logger.info(
-                        "NeMo llm_call adjusted: replaced unsupported temperature with 1.0 "
+                        "NeMo llm_call adjusted: removed unsupported temperature from params "
                         f"for provider={provider}, model={resolved_model_name}, "
                         f"original_temperature={original_temp}"
                     )
