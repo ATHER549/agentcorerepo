@@ -325,6 +325,20 @@ def _rebuild_llm_with_fallback_from_error(llm: Any, error_text: str) -> tuple[An
         source_key, target_key = "max_tokens", "max_output_tokens"
 
     if not source_key or not target_key:
+        # No max-tokens error detected; check for a temperature error.
+        # Rebuild the LLM with temperature=1.0 so the retry call's
+        # llm.bind(**params) uses the only accepted value rather than
+        # the LLM object's own default (e.g. 0.7).
+        is_temp_error = (
+            _contains_all(normalized_error, ("unsupported", "parameter", "temperature"))
+            or _contains_all(normalized_error, ("unsupported", "value", "temperature"))
+        )
+        if is_temp_error and hasattr(llm, "model_copy"):
+            try:
+                rebuilt = llm.model_copy(update={"temperature": 1.0})
+                return rebuilt, ["llm:temperature->1.0"]
+            except Exception:  # noqa: BLE001
+                pass
         return llm, []
     if not hasattr(llm, "model_copy"):
         return llm, []
@@ -812,10 +826,20 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     model_name=str(resolved_model_name),
                     temperature=params.get("temperature"),
                 ):
-                    stripped_temp = params.pop("temperature", None)
+                    original_temp = params.get("temperature")
+                    # Replace NeMo's unsupported temperature with 1.0 (the only
+                    # accepted value for models such as gpt-5.x, o1, o3).
+                    # Crucially this must be a REPLACEMENT, not a removal:
+                    # if we just pop temperature, llm.bind(**params) is called
+                    # without a temperature override, so the LLM object's own
+                    # default (e.g. 0.7 from LangChain) is used instead — which
+                    # Azure also rejects.  Setting 1.0 here forces
+                    # llm.bind(temperature=1.0, ...) and overrides that default.
+                    params["temperature"] = 1.0
                     logger.info(
-                        "NeMo llm_call adjusted: removed unsupported temperature "
-                        f"for provider={provider}, model={resolved_model_name}, temperature={stripped_temp}"
+                        "NeMo llm_call adjusted: replaced unsupported temperature with 1.0 "
+                        f"for provider={provider}, model={resolved_model_name}, "
+                        f"original_temperature={original_temp}"
                     )
 
             try:
