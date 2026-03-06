@@ -776,26 +776,28 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     params.pop("stream_usage", None)
                 else:
                     # Proactively rewrite max_tokens → max_completion_tokens when the
-                    # LLM's own _default_params already uses max_completion_tokens.
-                    # This detects models (e.g. AzureOpenAI gpt-5 class) that require
-                    # max_completion_tokens without hardcoding any model names.
-                    try:
-                        llm_default = llm._default_params
-                        if (
-                            isinstance(llm_default, dict)
-                            and "max_completion_tokens" in llm_default
-                            and "max_tokens" not in llm_default
-                            and "max_tokens" in params
-                            and "max_completion_tokens" not in params
-                        ):
-                            params["max_completion_tokens"] = params.pop("max_tokens")
-                            logger.info(
-                                "NeMo llm_call adjusted: rewrote max_tokens→max_completion_tokens "
-                                f"(detected from LLM _default_params) for provider={provider}, "
-                                f"model={resolved_model_name}"
-                            )
-                    except Exception:  # noqa: BLE001
-                        pass  # _default_params not available; fall through to retry path
+                    # LLM natively uses max_completion_tokens (e.g. Azure gpt-5 class).
+                    # We probe by setting max_tokens=1 on a shallow copy and reading
+                    # _default_params — this fires even when the LLM was initialised
+                    # WITHOUT an explicit max_tokens value, which is the common case.
+                    # Avoids hardcoding any model names.
+                    if "max_tokens" in params and "max_completion_tokens" not in params:
+                        try:
+                            probe = llm.model_copy(update={"max_tokens": 1})
+                            probe_defaults = probe._default_params
+                            if (
+                                isinstance(probe_defaults, dict)
+                                and "max_completion_tokens" in probe_defaults
+                                and "max_tokens" not in probe_defaults
+                            ):
+                                params["max_completion_tokens"] = params.pop("max_tokens")
+                                logger.info(
+                                    "NeMo llm_call adjusted: rewrote max_tokens→max_completion_tokens "
+                                    f"(probe: _default_params prefers max_completion_tokens) for "
+                                    f"provider={provider}, model={resolved_model_name}"
+                                )
+                        except Exception:  # noqa: BLE001
+                            pass  # probe unavailable; retry path handles it if needed
 
                 if _should_strip_temperature_for_model(
                     provider=provider,
