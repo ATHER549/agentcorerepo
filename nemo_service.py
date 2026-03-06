@@ -227,15 +227,18 @@ def _should_strip_temperature_for_model(
     if temp_value is None or temp_value == 1.0:
         return False
 
-    # Only strip temperature for true OpenAI reasoning models (o1/o3 series).
-    # These models reject any temperature value other than 1.0.
-    # Standard chat models — including gpt-5.x — DO accept temperature and
-    # must NOT be stripped here; NeMo passes temperature≈0 for deterministic
-    # Yes/No self-check responses, and removing it causes the model to become
-    # non-deterministic and return responses the NeMo output parser cannot match.
-    # If a model actually rejects temperature, the error-based retry path in
-    # _build_fallback_llm_params_from_error will remove it automatically.
-    return model_normalized.startswith("o1") or model_normalized.startswith("o3")
+    # Strip temperature for OpenAI models that reject non-default temperature values:
+    # - o1/o3 series: do not support the temperature parameter at all.
+    # - gpt-5.x series: only accept temperature=1.0 (the API default); any other value
+    #   raises "Unsupported value: 'temperature' does not support X with this model.
+    #   Only the default (1) value is supported."
+    # For all other models, NeMo's temperature≈0 is intentionally left in place so the
+    # model gives deterministic Yes/No self-check responses.
+    return (
+        model_normalized.startswith("o1")
+        or model_normalized.startswith("o3")
+        or model_normalized.startswith("gpt-5")
+    )
 
 
 def _contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
@@ -292,7 +295,10 @@ def _build_fallback_llm_params_from_error(
         params.pop("stream_usage", None)
         changes.append("removed:stream_usage")
 
-    if _contains_all(normalized_error, ("unsupported", "parameter", "temperature")) and "temperature" in params:
+    if (
+        _contains_all(normalized_error, ("unsupported", "parameter", "temperature"))
+        or _contains_all(normalized_error, ("unsupported", "value", "temperature"))
+    ) and "temperature" in params:
         params.pop("temperature", None)
         changes.append("removed:temperature")
 
