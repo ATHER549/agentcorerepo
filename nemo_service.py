@@ -206,12 +206,19 @@ def _coerce_temperature(value: Any) -> float | None:
         return None
 
 
+def _normalize_provider_for_model_constraints(provider: str | None) -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized == "azure_openai":
+        return "azure"
+    return normalized
+
+
 def _should_strip_temperature_for_model(
     provider: str | None,
     model_name: str | None,
     temperature: Any,
 ) -> bool:
-    provider_normalized = (provider or "").strip().lower()
+    provider_normalized = _normalize_provider_for_model_constraints(provider)
     model_normalized = (model_name or "").strip().lower()
     temp_value = _coerce_temperature(temperature)
 
@@ -227,6 +234,21 @@ def _should_strip_temperature_for_model(
         or model_normalized.startswith("o3")
         or model_normalized.startswith("gpt-5")
     )
+
+
+def _should_use_max_completion_tokens_for_model(
+    provider: str | None,
+    model_name: str | None,
+) -> bool:
+    provider_normalized = _normalize_provider_for_model_constraints(provider)
+    model_normalized = (model_name or "").strip().lower()
+
+    if provider_normalized not in {"openai", "azure", "openai_compatible"}:
+        return False
+
+    # GPT-5 chat/reasoning variants reject `max_tokens` and require
+    # `max_completion_tokens` instead.
+    return model_normalized.startswith("gpt-5")
 
 def _map_registry_provider_to_nemo_engine(provider: str) -> str:
     normalized = (provider or "").strip().lower()
@@ -367,6 +389,15 @@ def _build_model_parameters(model_config: dict[str, Any]) -> tuple[str, str, dic
             "NeMo model parameters adjusted: removed unsupported temperature "
             f"for provider={provider}, model={model_name}, temperature={stripped_temp}"
         )
+
+    if _should_use_max_completion_tokens_for_model(provider=provider, model_name=model_name):
+        if "max_tokens" in params and "max_completion_tokens" not in params:
+            max_tokens_value = params.pop("max_tokens")
+            params["max_completion_tokens"] = max_tokens_value
+            logger.info(
+                "NeMo model parameters adjusted: converted max_tokens to max_completion_tokens "
+                f"for provider={provider}, model={model_name}, value={max_tokens_value}"
+            )
 
     logger.info(
         "NeMo model parameters built: "
@@ -646,6 +677,18 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                         f"for provider={provider}, model={resolved_model_name}, temperature={stripped_temp}"
                     )
 
+                if _should_use_max_completion_tokens_for_model(
+                    provider=provider,
+                    model_name=str(resolved_model_name),
+                ):
+                    if "max_tokens" in params and "max_completion_tokens" not in params:
+                        max_tokens_value = params.pop("max_tokens")
+                        params["max_completion_tokens"] = max_tokens_value
+                        logger.info(
+                            "NeMo llm_call adjusted: converted max_tokens to max_completion_tokens "
+                            f"for provider={provider}, model={resolved_model_name}, value={max_tokens_value}"
+                        )
+
             return await original_llm_call(
                 llm=llm,
                 prompt=prompt,
@@ -675,6 +718,13 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
             provider = str(getattr(model_config, "engine", "")).lower()
             if provider in {"groq", "google_genai", "google_vertexai", "vertexai"}:
                 kwargs.pop("stream_usage", None)
+            model_name = str(getattr(model_config, "model", "") or "")
+            if _should_use_max_completion_tokens_for_model(
+                provider=provider,
+                model_name=model_name,
+            ):
+                if "max_tokens" in kwargs and "max_completion_tokens" not in kwargs:
+                    kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
             return kwargs
 
     return AgentcoreLLMRails(rails_config)
