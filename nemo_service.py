@@ -227,13 +227,15 @@ def _should_strip_temperature_for_model(
     if temp_value is None or temp_value == 1.0:
         return False
 
-    # Azure/OpenAI reasoning-like models reject custom temperature values.
-    # In practice this includes o1/o3 and gpt-5 variants (including *-chat deployments).
-    return (
-        model_normalized.startswith("o1")
-        or model_normalized.startswith("o3")
-        or model_normalized.startswith("gpt-5")
-    )
+    # Only strip temperature for true OpenAI reasoning models (o1/o3 series).
+    # These models reject any temperature value other than 1.0.
+    # Standard chat models — including gpt-5.x — DO accept temperature and
+    # must NOT be stripped here; NeMo passes temperature≈0 for deterministic
+    # Yes/No self-check responses, and removing it causes the model to become
+    # non-deterministic and return responses the NeMo output parser cannot match.
+    # If a model actually rejects temperature, the error-based retry path in
+    # _build_fallback_llm_params_from_error will remove it automatically.
+    return model_normalized.startswith("o1") or model_normalized.startswith("o3")
 
 
 def _contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
