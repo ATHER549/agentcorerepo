@@ -236,19 +236,58 @@ def _should_strip_temperature_for_model(
     )
 
 
-def _should_use_max_completion_tokens_for_model(
-    provider: str | None,
-    model_name: str | None,
-) -> bool:
-    provider_normalized = _normalize_provider_for_model_constraints(provider)
-    model_normalized = (model_name or "").strip().lower()
+def _contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
+    return all(token in haystack for token in needles)
 
-    if provider_normalized not in {"openai", "azure", "openai_compatible"}:
-        return False
 
-    # GPT-5 chat/reasoning variants reject `max_tokens` and require
-    # `max_completion_tokens` instead.
-    return model_normalized.startswith("gpt-5")
+def _build_fallback_llm_params_from_error(
+    llm_params: dict[str, Any],
+    error_text: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Build fallback params by adapting to provider/model-specific unsupported params.
+
+    This is intentionally model-agnostic and reacts to runtime API errors rather than
+    hardcoded model names.
+    """
+    params = dict(llm_params)
+    changes: list[str] = []
+    lower_error = (error_text or "").lower()
+
+    # Generic token-parameter fallbacks based on provider error hints.
+    if _contains_all(lower_error, ("unsupported", "parameter", "max_tokens", "max_completion_tokens")):
+        if "max_tokens" in params:
+            value = params.pop("max_tokens")
+            params.setdefault("max_completion_tokens", value)
+            changes.append("max_tokens->max_completion_tokens")
+
+    if _contains_all(lower_error, ("unsupported", "parameter", "max_completion_tokens", "max_tokens")):
+        if "max_completion_tokens" in params and "max_tokens" not in params:
+            value = params.pop("max_completion_tokens")
+            params["max_tokens"] = value
+            changes.append("max_completion_tokens->max_tokens")
+
+    if _contains_all(lower_error, ("unsupported", "parameter", "max_tokens", "max_output_tokens")):
+        if "max_tokens" in params:
+            value = params.pop("max_tokens")
+            params.setdefault("max_output_tokens", value)
+            changes.append("max_tokens->max_output_tokens")
+
+    if _contains_all(lower_error, ("unsupported", "parameter", "max_output_tokens", "max_tokens")):
+        if "max_output_tokens" in params and "max_tokens" not in params:
+            value = params.pop("max_output_tokens")
+            params["max_tokens"] = value
+            changes.append("max_output_tokens->max_tokens")
+
+    # Generic removals for common unsupported parameters.
+    if _contains_all(lower_error, ("unsupported", "parameter", "stream_usage")) and "stream_usage" in params:
+        params.pop("stream_usage", None)
+        changes.append("removed:stream_usage")
+
+    if _contains_all(lower_error, ("unsupported", "parameter", "temperature")) and "temperature" in params:
+        params.pop("temperature", None)
+        changes.append("removed:temperature")
+
+    return params, changes
 
 def _map_registry_provider_to_nemo_engine(provider: str) -> str:
     normalized = (provider or "").strip().lower()
@@ -389,15 +428,6 @@ def _build_model_parameters(model_config: dict[str, Any]) -> tuple[str, str, dic
             "NeMo model parameters adjusted: removed unsupported temperature "
             f"for provider={provider}, model={model_name}, temperature={stripped_temp}"
         )
-
-    if _should_use_max_completion_tokens_for_model(provider=provider, model_name=model_name):
-        if "max_tokens" in params and "max_completion_tokens" not in params:
-            max_tokens_value = params.pop("max_tokens")
-            params["max_completion_tokens"] = max_tokens_value
-            logger.info(
-                "NeMo model parameters adjusted: converted max_tokens to max_completion_tokens "
-                f"for provider={provider}, model={model_name}, value={max_tokens_value}"
-            )
 
     logger.info(
         "NeMo model parameters built: "
@@ -677,27 +707,38 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                         f"for provider={provider}, model={resolved_model_name}, temperature={stripped_temp}"
                     )
 
-                if _should_use_max_completion_tokens_for_model(
-                    provider=provider,
-                    model_name=str(resolved_model_name),
-                ):
-                    if "max_tokens" in params and "max_completion_tokens" not in params:
-                        max_tokens_value = params.pop("max_tokens")
-                        params["max_completion_tokens"] = max_tokens_value
-                        logger.info(
-                            "NeMo llm_call adjusted: converted max_tokens to max_completion_tokens "
-                            f"for provider={provider}, model={resolved_model_name}, value={max_tokens_value}"
-                        )
+            try:
+                return await original_llm_call(
+                    llm=llm,
+                    prompt=prompt,
+                    model_name=model_name,
+                    model_provider=model_provider,
+                    stop=stop,
+                    custom_callback_handlers=custom_callback_handlers,
+                    llm_params=params,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not isinstance(params, dict):
+                    raise
 
-            return await original_llm_call(
-                llm=llm,
-                prompt=prompt,
-                model_name=model_name,
-                model_provider=model_provider,
-                stop=stop,
-                custom_callback_handlers=custom_callback_handlers,
-                llm_params=params,
-            )
+                fallback_params, changes = _build_fallback_llm_params_from_error(params, str(exc))
+                if not changes:
+                    raise
+
+                logger.warning(
+                    "NeMo llm_call retry with fallback params: "
+                    f"provider={provider}, model={resolved_model_name}, changes={changes}"
+                )
+
+                return await original_llm_call(
+                    llm=llm,
+                    prompt=prompt,
+                    model_name=model_name,
+                    model_provider=model_provider,
+                    stop=stop,
+                    custom_callback_handlers=custom_callback_handlers,
+                    llm_params=fallback_params,
+                )
 
         setattr(_compat_llm_call, "_agentcore_compat_patched", True)
         llm_utils.llm_call = _compat_llm_call
@@ -718,13 +759,6 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
             provider = str(getattr(model_config, "engine", "")).lower()
             if provider in {"groq", "google_genai", "google_vertexai", "vertexai"}:
                 kwargs.pop("stream_usage", None)
-            model_name = str(getattr(model_config, "model", "") or "")
-            if _should_use_max_completion_tokens_for_model(
-                provider=provider,
-                model_name=model_name,
-            ):
-                if "max_tokens" in kwargs and "max_completion_tokens" not in kwargs:
-                    kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
             return kwargs
 
     return AgentcoreLLMRails(rails_config)
