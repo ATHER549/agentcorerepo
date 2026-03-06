@@ -297,8 +297,16 @@ def _build_fallback_llm_params_from_error(
     return params, changes
 
 
+_UNSET: Any = object()  # Sentinel for "field not present on LLM object"
+
+
 def _rebuild_llm_with_fallback_from_error(llm: Any, error_text: str) -> tuple[Any, list[str]]:
-    """Try rebuilding LLM when unsupported params are part of model initialization kwargs."""
+    """Try rebuilding LLM via model_copy when unsupported params are baked into the LLM object.
+
+    Uses Pydantic's model_copy (shallow copy + selective field overrides) rather than
+    model_dump + __class__(**data) to avoid issues with non-serialisable fields such as
+    SecretStr, callbacks, and internal httpx clients.
+    """
     normalized_error = _normalize_error_text(error_text)
 
     source_key: str | None = None
@@ -310,39 +318,48 @@ def _rebuild_llm_with_fallback_from_error(llm: Any, error_text: str) -> tuple[An
 
     if not source_key or not target_key:
         return llm, []
-    if not hasattr(llm, "model_dump"):
-        return llm, []
-
-    try:
-        data = llm.model_dump(exclude_none=True)
-    except Exception:  # noqa: BLE001
-        return llm, []
-
-    if not isinstance(data, dict):
+    if not hasattr(llm, "model_copy"):
         return llm, []
 
     changes: list[str] = []
-    token_value = data.pop(source_key, None)
-    if token_value is not None:
-        changes.append(f"llm:{source_key}->removed")
+    update_dict: dict[str, Any] = {}
+    token_value: Any = None
 
-    model_kwargs = data.get("model_kwargs")
-    if isinstance(model_kwargs, dict):
-        mk_token_value = model_kwargs.pop(source_key, None)
-        if mk_token_value is not None:
-            changes.append(f"llm:model_kwargs.{source_key}->removed")
-            if token_value is None:
-                token_value = mk_token_value
+    # 1) Check the top-level Pydantic field.
+    top_val = getattr(llm, source_key, _UNSET)
+    if top_val is not _UNSET and top_val is not None:
+        token_value = top_val
+        update_dict[source_key] = None
+        changes.append(f"llm:{source_key}->None")
 
-    if token_value is not None and target_key not in data:
-        data[target_key] = token_value
-        changes.append(f"llm:{source_key}->{target_key}")
+    # 2) Check inside model_kwargs (some providers store extra params here).
+    existing_mkwargs: dict[str, Any] = dict(getattr(llm, "model_kwargs", None) or {})
+    if source_key in existing_mkwargs and existing_mkwargs[source_key] is not None:
+        mk_val = existing_mkwargs.pop(source_key)
+        if token_value is None:
+            token_value = mk_val
+        update_dict["model_kwargs"] = existing_mkwargs
+        changes.append(f"llm:model_kwargs.{source_key}->removed")
 
     if not changes:
         return llm, []
 
+    # 3) Route the token value to target_key.
+    #    Prefer a named Pydantic field; otherwise stash in model_kwargs so the
+    #    underlying API client receives it correctly.
+    if token_value is not None:
+        model_fields = getattr(llm, "model_fields", {})
+        if target_key in model_fields:
+            update_dict[target_key] = token_value
+        else:
+            # No named field → inject via model_kwargs
+            mk = dict(update_dict.get("model_kwargs", existing_mkwargs) or {})
+            mk[target_key] = token_value
+            update_dict["model_kwargs"] = mk
+        changes.append(f"llm:{source_key}->{target_key}")
+
     try:
-        rebuilt_llm = llm.__class__(**data)
+        rebuilt_llm = llm.model_copy(update=update_dict)
     except Exception:  # noqa: BLE001
         return llm, []
 
@@ -740,8 +757,17 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
         ) -> str:
             params = dict(llm_params) if isinstance(llm_params, dict) else llm_params
 
+            # Resolve provider/model_name unconditionally so they are always
+            # available inside the except block even when llm_params is None.
+            provider = (llm_utils.get_llm_provider(llm) or "").lower()
+            resolved_model_name = (
+                model_name
+                or getattr(llm, "model", None)
+                or getattr(llm, "model_name", None)
+                or ""
+            )
+
             if isinstance(params, dict):
-                provider = (llm_utils.get_llm_provider(llm) or "").lower()
                 if provider in {"google_genai", "google_vertexai", "vertexai"}:
                     if "max_tokens" in params and "max_output_tokens" not in params:
                         params["max_output_tokens"] = params.pop("max_tokens")
@@ -749,12 +775,6 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                 elif provider in {"groq"}:
                     params.pop("stream_usage", None)
 
-                resolved_model_name = (
-                    model_name
-                    or getattr(llm, "model", None)
-                    or getattr(llm, "model_name", None)
-                    or ""
-                )
                 if _should_strip_temperature_for_model(
                     provider=provider,
                     model_name=str(resolved_model_name),
@@ -777,11 +797,17 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     llm_params=params,
                 )
             except Exception as exc:  # noqa: BLE001
-                if not isinstance(params, dict):
-                    raise
+                error_str = str(exc)
+                # Build fallback params only when params is a dict.  When
+                # llm_params is None, NeMo passes token limits baked into the
+                # LLM object itself, so we must always attempt the LLM rebuild
+                # regardless of whether llm_params was supplied.
+                fallback_params: dict[str, Any] | None = params
+                param_changes: list[str] = []
+                if isinstance(params, dict):
+                    fallback_params, param_changes = _build_fallback_llm_params_from_error(params, error_str)
 
-                fallback_params, param_changes = _build_fallback_llm_params_from_error(params, str(exc))
-                fallback_llm, llm_changes = _rebuild_llm_with_fallback_from_error(llm, str(exc))
+                fallback_llm, llm_changes = _rebuild_llm_with_fallback_from_error(llm, error_str)
                 changes = [*param_changes, *llm_changes]
                 if not changes:
                     raise
