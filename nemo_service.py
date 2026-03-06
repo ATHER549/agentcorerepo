@@ -774,6 +774,28 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                     params.pop("stream_usage", None)
                 elif provider in {"groq"}:
                     params.pop("stream_usage", None)
+                else:
+                    # Proactively rewrite max_tokens → max_completion_tokens when the
+                    # LLM's own _default_params already uses max_completion_tokens.
+                    # This detects models (e.g. AzureOpenAI gpt-5 class) that require
+                    # max_completion_tokens without hardcoding any model names.
+                    try:
+                        llm_default = llm._default_params
+                        if (
+                            isinstance(llm_default, dict)
+                            and "max_completion_tokens" in llm_default
+                            and "max_tokens" not in llm_default
+                            and "max_tokens" in params
+                            and "max_completion_tokens" not in params
+                        ):
+                            params["max_completion_tokens"] = params.pop("max_tokens")
+                            logger.info(
+                                "NeMo llm_call adjusted: rewrote max_tokens→max_completion_tokens "
+                                f"(detected from LLM _default_params) for provider={provider}, "
+                                f"model={resolved_model_name}"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass  # _default_params not available; fall through to retry path
 
                 if _should_strip_temperature_for_model(
                     provider=provider,
