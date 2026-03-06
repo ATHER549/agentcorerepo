@@ -240,6 +240,13 @@ def _contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
     return all(token in haystack for token in needles)
 
 
+def _normalize_error_text(error_text: str) -> str:
+    text = (error_text or "").lower()
+    for ch in (" ", "_", "-", "`", "'", '"'):
+        text = text.replace(ch, "")
+    return text
+
+
 def _build_fallback_llm_params_from_error(
     llm_params: dict[str, Any],
     error_text: str,
@@ -251,43 +258,95 @@ def _build_fallback_llm_params_from_error(
     """
     params = dict(llm_params)
     changes: list[str] = []
-    lower_error = (error_text or "").lower()
+    normalized_error = _normalize_error_text(error_text)
 
     # Generic token-parameter fallbacks based on provider error hints.
-    if _contains_all(lower_error, ("unsupported", "parameter", "max_tokens", "max_completion_tokens")):
+    if _contains_all(normalized_error, ("unsupported", "parameter", "maxtokens", "maxcompletiontokens")):
         if "max_tokens" in params:
             value = params.pop("max_tokens")
             params.setdefault("max_completion_tokens", value)
             changes.append("max_tokens->max_completion_tokens")
 
-    if _contains_all(lower_error, ("unsupported", "parameter", "max_completion_tokens", "max_tokens")):
+    if _contains_all(normalized_error, ("unsupported", "parameter", "maxcompletiontokens", "maxtokens")):
         if "max_completion_tokens" in params and "max_tokens" not in params:
             value = params.pop("max_completion_tokens")
             params["max_tokens"] = value
             changes.append("max_completion_tokens->max_tokens")
 
-    if _contains_all(lower_error, ("unsupported", "parameter", "max_tokens", "max_output_tokens")):
+    if _contains_all(normalized_error, ("unsupported", "parameter", "maxtokens", "maxoutputtokens")):
         if "max_tokens" in params:
             value = params.pop("max_tokens")
             params.setdefault("max_output_tokens", value)
             changes.append("max_tokens->max_output_tokens")
 
-    if _contains_all(lower_error, ("unsupported", "parameter", "max_output_tokens", "max_tokens")):
+    if _contains_all(normalized_error, ("unsupported", "parameter", "maxoutputtokens", "maxtokens")):
         if "max_output_tokens" in params and "max_tokens" not in params:
             value = params.pop("max_output_tokens")
             params["max_tokens"] = value
             changes.append("max_output_tokens->max_tokens")
 
     # Generic removals for common unsupported parameters.
-    if _contains_all(lower_error, ("unsupported", "parameter", "stream_usage")) and "stream_usage" in params:
+    if _contains_all(normalized_error, ("unsupported", "parameter", "streamusage")) and "stream_usage" in params:
         params.pop("stream_usage", None)
         changes.append("removed:stream_usage")
 
-    if _contains_all(lower_error, ("unsupported", "parameter", "temperature")) and "temperature" in params:
+    if _contains_all(normalized_error, ("unsupported", "parameter", "temperature")) and "temperature" in params:
         params.pop("temperature", None)
         changes.append("removed:temperature")
 
     return params, changes
+
+
+def _rebuild_llm_with_fallback_from_error(llm: Any, error_text: str) -> tuple[Any, list[str]]:
+    """Try rebuilding LLM when unsupported params are part of model initialization kwargs."""
+    normalized_error = _normalize_error_text(error_text)
+
+    source_key: str | None = None
+    target_key: str | None = None
+    if _contains_all(normalized_error, ("unsupported", "parameter", "maxtokens", "maxcompletiontokens")):
+        source_key, target_key = "max_tokens", "max_completion_tokens"
+    elif _contains_all(normalized_error, ("unsupported", "parameter", "maxtokens", "maxoutputtokens")):
+        source_key, target_key = "max_tokens", "max_output_tokens"
+
+    if not source_key or not target_key:
+        return llm, []
+    if not hasattr(llm, "model_dump"):
+        return llm, []
+
+    try:
+        data = llm.model_dump(exclude_none=True)
+    except Exception:  # noqa: BLE001
+        return llm, []
+
+    if not isinstance(data, dict):
+        return llm, []
+
+    changes: list[str] = []
+    token_value = data.pop(source_key, None)
+    if token_value is not None:
+        changes.append(f"llm:{source_key}->removed")
+
+    model_kwargs = data.get("model_kwargs")
+    if isinstance(model_kwargs, dict):
+        mk_token_value = model_kwargs.pop(source_key, None)
+        if mk_token_value is not None:
+            changes.append(f"llm:model_kwargs.{source_key}->removed")
+            if token_value is None:
+                token_value = mk_token_value
+
+    if token_value is not None and target_key not in data:
+        data[target_key] = token_value
+        changes.append(f"llm:{source_key}->{target_key}")
+
+    if not changes:
+        return llm, []
+
+    try:
+        rebuilt_llm = llm.__class__(**data)
+    except Exception:  # noqa: BLE001
+        return llm, []
+
+    return rebuilt_llm, changes
 
 def _map_registry_provider_to_nemo_engine(provider: str) -> str:
     normalized = (provider or "").strip().lower()
@@ -721,7 +780,9 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                 if not isinstance(params, dict):
                     raise
 
-                fallback_params, changes = _build_fallback_llm_params_from_error(params, str(exc))
+                fallback_params, param_changes = _build_fallback_llm_params_from_error(params, str(exc))
+                fallback_llm, llm_changes = _rebuild_llm_with_fallback_from_error(llm, str(exc))
+                changes = [*param_changes, *llm_changes]
                 if not changes:
                     raise
 
@@ -731,7 +792,7 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                 )
 
                 return await original_llm_call(
-                    llm=llm,
+                    llm=fallback_llm,
                     prompt=prompt,
                     model_name=model_name,
                     model_provider=model_provider,
