@@ -213,32 +213,67 @@ def _normalize_provider_for_model_constraints(provider: str | None) -> str:
     return normalized
 
 
-def _should_strip_temperature_for_model(
-    provider: str | None,
-    model_name: str | None,
-    temperature: Any,
-) -> bool:
+def _coerce_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except Exception:  # noqa: BLE001
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _is_openai_reasoning_family(provider: str | None, model_name: str | None) -> bool:
     provider_normalized = _normalize_provider_for_model_constraints(provider)
     model_normalized = (model_name or "").strip().lower()
-    temp_value = _coerce_temperature(temperature)
-
     if provider_normalized not in {"openai", "azure", "openai_compatible"}:
         return False
-    if temp_value is None or temp_value == 1.0:
-        return False
-
-    # Strip temperature for OpenAI models that reject non-default temperature values:
-    # - o1/o3 series: do not support the temperature parameter at all.
-    # - gpt-5.x series: only accept temperature=1.0 (the API default); any other value
-    #   raises "Unsupported value: 'temperature' does not support X with this model.
-    #   Only the default (1) value is supported."
-    # For all other models, NeMo's temperature≈0 is intentionally left in place so the
-    # model gives deterministic Yes/No self-check responses.
     return (
         model_normalized.startswith("o1")
         or model_normalized.startswith("o3")
         or model_normalized.startswith("gpt-5")
     )
+
+
+def _ensure_reasoning_completion_budget(
+    provider: str | None,
+    model_name: str | None,
+    params: dict[str, Any],
+) -> int | None:
+    """Ensure max_completion_tokens is not too low for reasoning models.
+
+    NeMo self-check rails often use max_tokens=3. After rewriting to
+    max_completion_tokens for GPT-5/o-series, that budget can be too small and
+    produce truncated/ambiguous responses, which NeMo may parse as unsafe.
+    """
+    if not isinstance(params, dict):
+        return None
+    if not _is_openai_reasoning_family(provider=provider, model_name=model_name):
+        return None
+    if "max_completion_tokens" not in params:
+        return None
+
+    current_value = _coerce_positive_int(params.get("max_completion_tokens"))
+    if current_value is None:
+        return None
+
+    minimum_safe_budget = 32
+    if current_value < minimum_safe_budget:
+        params["max_completion_tokens"] = minimum_safe_budget
+        return current_value
+    return None
+
+
+def _should_strip_temperature_for_model(
+    provider: str | None,
+    model_name: str | None,
+    temperature: Any,
+) -> bool:
+    temp_value = _coerce_temperature(temperature)
+
+    if not _is_openai_reasoning_family(provider=provider, model_name=model_name):
+        return False
+    if temp_value is None or temp_value == 1.0:
+        return False
+    return True
 
 
 def _contains_all(haystack: str, needles: tuple[str, ...]) -> bool:
@@ -665,6 +700,18 @@ def _build_rails_from_config_path(config_dir: Path) -> Any:
                         "NeMo llm_call adjusted: removed unsupported temperature from params "
                         f"for provider={provider}, model={resolved_model_name}, "
                         f"original_temperature={original_temp}"
+                    )
+
+                previous_budget = _ensure_reasoning_completion_budget(
+                    provider=provider,
+                    model_name=str(resolved_model_name),
+                    params=params,
+                )
+                if previous_budget is not None:
+                    logger.info(
+                        "NeMo llm_call adjusted: raised max_completion_tokens for reasoning self-check stability "
+                        f"for provider={provider}, model={resolved_model_name}, "
+                        f"original_max_completion_tokens={previous_budget}, new_max_completion_tokens=32"
                     )
 
             try:
