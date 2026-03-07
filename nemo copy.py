@@ -1059,15 +1059,19 @@ def _is_input_rail_blocked(activated_rails: list[dict[str, Any]]) -> tuple[bool,
         decisions = [str(item).strip().lower() for item in rail.get("decisions", [])]
 
         # IMPORTANT:
-        # Some NeMo flows can include "stop" in decisions even for non-blocking
-        # execution paths. Treating any "stop" token as a block causes all input
-        # rails to be marked blocked. The most reliable signal is the explicit
-        # rail.stop boolean. We still keep a conservative fallback for explicit
-        # block/refuse decisions.
+        # For some NeMo input rails (notably self-check rails), `stop=True` can
+        # appear for control-flow transitions and does not always mean policy block.
+        # We therefore require explicit refusal/block hints in decisions before
+        # classifying the rail as blocked.
         explicit_block_decision = any(
-            item in {"block", "blocked", "refuse", "refused"} for item in decisions
+            item in {"block", "blocked", "refuse", "refused", "unsafe"}
+            for item in decisions
         )
-        if bool(rail.get("stop")) or explicit_block_decision:
+        refusal_hint = any(
+            ("refuse" in item) or ("block" in item) or ("unsafe" in item)
+            for item in decisions
+        )
+        if explicit_block_decision or (bool(rail.get("stop")) and refusal_hint):
             blocked_names.append(str(rail.get("name") or "<unnamed>"))
     return bool(blocked_names), blocked_names
 
