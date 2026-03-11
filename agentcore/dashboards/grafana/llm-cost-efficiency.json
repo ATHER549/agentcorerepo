@@ -1,0 +1,233 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "blue", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Total LLM Calls",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(agentcore_llm_calls_total)",
+          "legendFormat": "Calls"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "purple", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Total Input Tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(agentcore_llm_tokens_total{direction=\"input\"})",
+          "legendFormat": "Input"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "steps": [{ "color": "orange", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Total Output Tokens",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(agentcore_llm_tokens_total{direction=\"output\"})",
+          "legendFormat": "Output"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 2000 },
+              { "color": "red", "value": 5000 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Avg LLM Latency",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(rate(agentcore_llm_call_duration_ms_sum[5m])) / clamp_min(sum(rate(agentcore_llm_call_duration_ms_count[5m])), 0.001)",
+          "legendFormat": "Avg"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "Token Usage Over Time (Input vs Output)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (direction) (rate(agentcore_llm_tokens_total[5m])) * 300",
+          "legendFormat": "{{direction}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "LLM Calls Over Time by Model",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (model_name) (rate(agentcore_llm_calls_total[5m]))",
+          "legendFormat": "{{model_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 7,
+      "options": { "orientation": "horizontal" },
+      "title": "Tokens per Model (Input)",
+      "type": "bargauge",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (model_name) (agentcore_llm_tokens_total{direction=\"input\"}))",
+          "legendFormat": "{{model_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 8,
+      "options": { "orientation": "horizontal" },
+      "title": "Tokens per Model (Output)",
+      "type": "bargauge",
+      "targets": [
+        {
+          "expr": "topk(10, sum by (model_name) (agentcore_llm_tokens_total{direction=\"output\"}))",
+          "legendFormat": "{{model_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 9,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "LLM Latency by Model (P50 / P95)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (model_name, le) (rate(agentcore_llm_call_duration_ms_bucket[5m])))",
+          "legendFormat": "P50 {{model_name}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (model_name, le) (rate(agentcore_llm_call_duration_ms_bucket[5m])))",
+          "legendFormat": "P95 {{model_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 10,
+      "options": { "tooltip": { "mode": "multi" } },
+      "title": "Avg Tokens per LLM Call by Model",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (model_name) (rate(agentcore_llm_tokens_total[5m])) / clamp_min(sum by (model_name) (rate(agentcore_llm_calls_total[5m])), 0.001)",
+          "legendFormat": "{{model_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "id": 11,
+      "options": { "legendDisplayMode": "table", "placement": "right" },
+      "title": "LLM Call Distribution by Provider",
+      "type": "piechart",
+      "targets": [
+        {
+          "expr": "sum by (provider) (agentcore_llm_calls_total)",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["agentcore", "llm", "cost"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data Source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "AgentCore - LLM Cost & Efficiency",
+  "uid": "agentcore-llm-cost-efficiency",
+  "version": 1
+}

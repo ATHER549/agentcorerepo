@@ -1,0 +1,92 @@
+name: Release Management Bump
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Override bump type (major/minor/patch)"
+        required: false
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      notes:
+        description: "Optional release notes override"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  determine-bump:
+    name: Determine Bump Type
+    runs-on: ubuntu-latest
+    outputs:
+      bump_type: ${{ steps.out.outputs.bump_type }}
+      notes: ${{ steps.out.outputs.notes }}
+    steps:
+      - name: Determine bump
+        id: out
+        shell: bash
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          INPUT_BUMP="${{ github.event.inputs.bump_type || '' }}"
+          INPUT_NOTES="${{ github.event.inputs.notes || '' }}"
+          COMMIT_MSG="${{ github.event.head_commit.message || '' }}"
+
+          if [[ -n "$INPUT_BUMP" ]]; then
+            BUMP_TYPE="$INPUT_BUMP"
+          else
+            MSG_LC="$(echo "$COMMIT_MSG" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$MSG_LC" == *"breaking change"* ]] || [[ "$COMMIT_MSG" =~ !: ]]; then
+              BUMP_TYPE="major"
+            elif [[ "$MSG_LC" =~ ^feat(\(.+\))?: ]]; then
+              BUMP_TYPE="minor"
+            else
+              BUMP_TYPE="patch"
+            fi
+          fi
+
+          if [[ -n "$INPUT_NOTES" ]]; then
+            NOTES="$INPUT_NOTES"
+          else
+            NOTES="CI bump from ${GITHUB_REF_NAME} @ ${GITHUB_SHA:0:7} by @${{ github.actor }} (${EVENT_NAME})"
+          fi
+
+          echo "bump_type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+
+  bump-release:
+    name: Call Release Bump API
+    needs: determine-bump
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release-management
+    steps:
+      - name: Validate secrets
+        env:
+          RELEASE_API_URL: ${{ secrets.RELEASE_API_URL }}
+          RELEASE_API_TOKEN: ${{ secrets.RELEASE_API_TOKEN }}
+        run: |
+          test -n "$RELEASE_API_URL" || (echo "Missing secret: RELEASE_API_URL" && exit 1)
+          test -n "$RELEASE_API_TOKEN" || (echo "Missing secret: RELEASE_API_TOKEN" && exit 1)
+
+      - name: Call /api/releases/bump
+        env:
+          RELEASE_API_URL: ${{ secrets.RELEASE_API_URL }}
+          RELEASE_API_TOKEN: ${{ secrets.RELEASE_API_TOKEN }}
+          BUMP_TYPE: ${{ needs.determine-bump.outputs.bump_type }}
+          NOTES: ${{ needs.determine-bump.outputs.notes }}
+        run: |
+          PAYLOAD="$(jq -n --arg bump "$BUMP_TYPE" --arg notes "$NOTES" '{bump_type:$bump, release_notes:$notes}')"
+          echo "Bumping release with type: $BUMP_TYPE"
+          curl -fsS \
+            -X POST "${RELEASE_API_URL%/}/api/releases/bump" \
+            -H "Authorization: Bearer ${RELEASE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "$PAYLOAD"

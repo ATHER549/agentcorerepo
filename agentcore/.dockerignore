@@ -1,0 +1,9 @@
+# DEV-only observability: do not ship in prod images
+docker-compose.otel.yml
+docker-compose.otel.local-file.yml
+otel-collector-config.yaml
+otel-collector-config.local-file.yaml
+tools/observability/
+loguru/
+*.jsonl
+*.prom

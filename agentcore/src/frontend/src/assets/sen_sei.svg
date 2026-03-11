@@ -1,0 +1,15 @@
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" viewBox="0 0 230 54.7" style="enable-background:new 0 0 230 54.7;" xml:space="preserve">
+  <style type="text/css">
+    .st0{fill:#DA2128;}
+    .brand-text{font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-weight: 700; font-size: 36px; letter-spacing: -0.04em;}
+  </style>
+  <g>
+    <g transform="translate(-16, -277)">
+      <path class="st0" d="m63.1,287.7c-2.7,0.9-4.4,3-4.4,5.3v38.4h10.2c2.5,0,4.4-1.6,4.4-3.5v-43.5L63.1,287.7z"/>
+      <path class="st0" d="m44.1,299.6c-2.7,0.9-4.4,3-4.4,5.3v26.6h10.2c2.5,0,4.4-1.6,4.4-3.5v-31.7L44.1,299.6z"/>
+      <path class="st0" d="m25.1,311.2c-2.7,1-4.4,3-4.4,5.3v14.9h10.2c2.5,0,4.4-1.6,4.4-3.5v-20L25.1,311.2z"/>
+    </g>
+
+    <text x="62" y="42" class="st0 brand-text">AgentCore</text>
+  </g>
+</svg>

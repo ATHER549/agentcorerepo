@@ -1,0 +1,21 @@
+import type { Node } from "reactFlow";
+export type SelectedViewFieldProps = {
+  selectedViewField: { type: string; id: string } | undefined;
+  setSelectedViewField: (
+    field: { type: string; id: string } | undefined,
+  ) => void;
+  haveChat: { type: string; id: string; displayName: string } | undefined;
+  inputs: Array<{
+    type: string;
+    id: string;
+    displayName: string;
+  }>;
+  outputs: Array<{
+    type: string;
+    id: string;
+    displayName: string;
+  }>;
+  sessions: string[];
+  currentAgentId: string;
+  nodes: Node[];
+};

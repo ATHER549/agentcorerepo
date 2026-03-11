@@ -1,0 +1,120 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "LLM Tokens Over Time",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (direction) (rate(agentcore_llm_tokens_total[5m])) * 300",
+          "legendFormat": "{{direction}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "LLM Calls by Model",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (model_name) (rate(agentcore_llm_calls_total[5m]))",
+          "legendFormat": "{{model_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "Login Attempts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(agentcore_login_attempts_total[5m])) * 300",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "id": 4,
+      "title": "API Request Volume",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_requests_total[5m]))",
+          "legendFormat": "Requests/s"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "id": 5,
+      "title": "Agent Runs by Agent",
+      "type": "piechart",
+      "options": { "legendDisplayMode": "table", "placement": "right" },
+      "targets": [
+        {
+          "expr": "sum by (agent_name) (agentcore_agent_runs_total)",
+          "legendFormat": "{{agent_name}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "$datasource" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "id": 6,
+      "title": "Token Usage by Model (Cumulative)",
+      "type": "bargauge",
+      "options": { "orientation": "horizontal" },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (model_name) (agentcore_llm_tokens_total))",
+          "legendFormat": "{{model_name}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["agentcore", "usage"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data Source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "AgentCore - Usage Analytics",
+  "uid": "agentcore-usage-analytics",
+  "version": 1
+}
