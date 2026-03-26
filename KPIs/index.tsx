@@ -148,6 +148,7 @@ const sections: SectionConfig[] = [
       { name: "API Latency P95", value: "0ms", scope: "global" },
       { name: "API Latency P99", value: "0ms", scope: "global" },
       { name: "Error Rate %", value: "0%", scope: "global" },
+      { name: "Running Pods", value: "0" },
       { name: "AKS Pod Scaling Events", value: "0" },
       { name: "CPU/Memory Saturation %", value: "0%", scope: "global" },
       { name: "Total Runs", value: "0" },
@@ -866,7 +867,7 @@ export default function DashboardAdmin(): JSX.Element {
   const devCodeKpiFallback:     SectionKpi[] = [{ name: "Avg. Version Count of Agents", value: "0" }];
   const businessMaturityFallback:SectionKpi[]= [{ name: "% Agents with Guardrails", value: "0%" }, { name: "% Agents with RAG", value: "0%" }, { name: "% Agents with HITL", value: "0%" }];
   const rootMaturityFallback:   SectionKpi[] = [{ name: "% Agents with Guardrails", value: "0%" }, { name: "% Agents with RAG", value: "0%" }, { name: "% Agents with HITL", value: "0%" }];
-  const platformKpiFallback:    SectionKpi[] = [{ name: "Platform Uptime %", value: "0%" }, { name: "API Latency P95", value: "0ms" }, { name: "API Latency P99", value: "0ms" }, { name: "Error Rate %", value: "0%" }, { name: "AKS Pod Scaling Events", value: "0" }, { name: "CPU/Memory Saturation %", value: "0%" }, { name: "Total Agent Runs", value: "0" }, { name: "Failed Agent Runs", value: "0" }, { name: "Execution Failure Rate", value: "0%" }];
+  const platformKpiFallback:    SectionKpi[] = [{ name: "Platform Uptime %", value: "0%" }, { name: "API Latency P95", value: "0ms" }, { name: "API Latency P99", value: "0ms" }, { name: "Error Rate %", value: "0%" }, { name: "Running Pods", value: "0" }, { name: "AKS Pod Scaling Events", value: "0" }, { name: "CPU/Memory Saturation %", value: "0%" }, { name: "Total Agent Runs", value: "0" }, { name: "Failed Agent Runs", value: "0" }, { name: "Execution Failure Rate", value: "0%" }];
   const costKpiFallback:        SectionKpi[] = [{ name: "Total Cost", value: "$0.00" }, { name: "Avg Cost Per Run", value: "$0.00" }];
   const devPerformanceFallback: SectionKpi[] = [{ name: "Avg Agent Latency", value: "0ms" }, { name: "Latency P95", value: "0ms" }, { name: "Latency P99", value: "0ms" }];
   const businessExperienceFallback:SectionKpi[]=[{ name: "Avg Response Time", value: "0ms" }, { name: "Avg Session Duration", value: "0ms" }, { name: "Escalation to Human", value: "0" }, { name: "User Satisfaction Score", value: "0" }];
@@ -888,8 +889,9 @@ export default function DashboardAdmin(): JSX.Element {
         const cpuv = gv(cpu?.data?.prometheus) ?? latestSeriesValue(cm?.data, "CPU %");
         const memv = gv(mem?.data?.prometheus) ?? latestSeriesValue(cm?.data, "Memory %");
         const dv = gsv(sc?.data, "Desired Replicas (HPA)"); let se = 0; for (let i = 1; i < dv.length; i++) if (dv[i] !== dv[i-1]) se++;
+        const rv = gsv(sc?.data, "Running Pods"); const runningPods = rv.length > 0 ? Math.round(rv[rv.length - 1]) : null;
         const cpuMemValue = cpuv != null || memv != null ? `${cpuv != null ? formatPercentMetric(cpuv) : "--"} / ${memv != null ? formatPercentMetric(memv) : "--"}` : "0%";
-        setPlatformKpis([{ name: "Platform Uptime %", value: uv != null ? `${uv.toFixed(2)}%` : "0%" }, { name: "API Latency P95", value: p95v != null ? `${Math.round(p95v)}ms` : "0ms" }, { name: "API Latency P99", value: p99v != null ? `${Math.round(p99v)}ms` : "0ms" }, { name: "Error Rate %", value: erv != null ? `${erv.toFixed(2)}%` : "0%" }, { name: "AKS Pod Scaling Events", value: `${se}` }, { name: "CPU/Memory Saturation %", value: cpuMemValue }]);
+        setPlatformKpis([{ name: "Platform Uptime %", value: uv != null ? `${uv.toFixed(2)}%` : "0%" }, { name: "API Latency P95", value: p95v != null ? `${Math.round(p95v)}ms` : "0ms" }, { name: "API Latency P99", value: p99v != null ? `${Math.round(p99v)}ms` : "0ms" }, { name: "Error Rate %", value: erv != null ? `${erv.toFixed(2)}%` : "0%" }, { name: "Running Pods", value: runningPods != null ? `${runningPods}` : "0" }, { name: "AKS Pod Scaling Events", value: `${se}` }, { name: "CPU/Memory Saturation %", value: cpuMemValue }]);
       }).catch(() => setPlatformKpis(platformKpiFallback));
   }, [isSuperAdmin, refreshTick]);
   useEffect(() => {

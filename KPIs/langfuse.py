@@ -287,11 +287,10 @@ class LangFuseTracer(BaseTracer):
             except ImportError:
                 pass
 
-            # v3: Create root observation using start_as_current_observation.
-            # Use "generation" so Langfuse displays accumulated token usage,
-            # model info, and cost at the trace level in its UI.
+            # v3: Create root span using start_as_current_observation
+            # The root span becomes the trace, input/output derive from it
             self._root_context = self._client.start_as_current_observation(
-                as_type="generation",
+                as_type="span",
                 name=self.agent_name or self.agent_id,
                 metadata=trace_metadata,
             )
@@ -357,12 +356,10 @@ class LangFuseTracer(BaseTracer):
         span_metadata |= metadata or {}
 
         try:
-            # Use "generation" for components that produce LLM token usage so
-            # Langfuse displays token counts, model info, and cost in its UI.
-            # Agent-type nodes (Worker Node, etc.) also carry token usage from
-            # their internal LLM calls, so they need "generation" too.
+            # Use "generation" for LLM and guardrail components so Langfuse
+            # displays token usage, model info, and latency in its Generation tab.
             # "span" observations do not show token metrics in the Langfuse UI.
-            observation_type = "generation" if str(trace_type).lower() in ("llm", "guardrail", "agent") else "span"
+            observation_type = "generation" if str(trace_type).lower() in ("llm", "guardrail") else "span"
             # v3: Create span with input passed directly to start_as_current_observation
             span_context = self._client.start_as_current_observation(
                 as_type=observation_type,
