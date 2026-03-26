@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time as _time
 from datetime import datetime, timezone, date, time, timedelta
 from uuid import UUID
 
@@ -1296,48 +1298,74 @@ class CostTrendResponse(BaseModel):
     series: list[TimeseriesPoint]
 
 
+# Process-level cache + lock so concurrent dashboard requests share one fetch.
+_dashboard_trace_cache: dict[str, tuple[float, list]] = {}
+_dashboard_trace_lock = asyncio.Lock()
+_DASHBOARD_TRACE_TTL = 60.0  # seconds
+
+
 async def _fetch_observability_traces(
     session: DbSession,
     current_user: CurrentActiveUser,
     org_id: UUID | None,
     from_days: int = 30,
-    limit: int = 2000,
 ):
-    """Fetch enriched traces scoped to the user's org for dashboard KPIs.
+    """Fetch traces for dashboard KPIs with dedup cache.
 
-    Uses a capped limit instead of fetch_all to prevent unbounded memory
-    usage when multiple dashboard endpoints call this concurrently.
+    Multiple dashboard endpoints call this concurrently on page load.
+    The lock ensures only ONE Langfuse fetch happens; others wait and
+    reuse the cached result.
     """
-    from agentcore.api.observability.scope import resolve_scope_context
-    from agentcore.api.observability.trace_store import TraceStore
-    from agentcore.api.observability.parsing import compute_date_range, clear_request_caches
+    cache_key = f"{current_user.id}:{org_id}:{from_days}"
 
-    clear_request_caches()
+    # Fast path: return cached result without lock
+    cached = _dashboard_trace_cache.get(cache_key)
+    if cached and (_time.monotonic() - cached[0]) < _DASHBOARD_TRACE_TTL:
+        return cached[1]
 
-    # Dashboard KPIs need cross-org access for leader_executive/root without
-    # requiring an explicit org_id filter.
-    allowed_user_ids, scoped_clients, scope_key, _ = await resolve_scope_context(
-        session=session,
-        current_user=current_user,
-        org_id=org_id,
-        trace_scope="all",
-        enforce_filter_for_admin=False,
-    )
-    if not scoped_clients or not allowed_user_ids:
-        return []
+    async with _dashboard_trace_lock:
+        # Re-check after acquiring lock (another request may have filled cache)
+        cached = _dashboard_trace_cache.get(cache_key)
+        if cached and (_time.monotonic() - cached[0]) < _DASHBOARD_TRACE_TTL:
+            return cached[1]
 
-    from_ts, to_ts = compute_date_range(None, None, None, default_days=from_days)
+        from agentcore.api.observability.scope import resolve_scope_context
+        from agentcore.api.observability.trace_store import TraceStore
+        from agentcore.api.observability.parsing import compute_date_range, clear_request_caches
 
-    traces, _ = TraceStore.get_traces(
-        clients=scoped_clients,
-        allowed_user_ids=allowed_user_ids,
-        scope_key=scope_key,
-        from_timestamp=from_ts,
-        to_timestamp=to_ts,
-        fetch_all=False,
-        limit=limit,
-    )
-    return traces
+        clear_request_caches()
+
+        allowed_user_ids, scoped_clients, scope_key, _ = await resolve_scope_context(
+            session=session,
+            current_user=current_user,
+            org_id=org_id,
+            trace_scope="all",
+            enforce_filter_for_admin=False,
+        )
+        if not scoped_clients or not allowed_user_ids:
+            return []
+
+        from_ts, to_ts = compute_date_range(None, None, None, default_days=from_days)
+
+        traces, _ = TraceStore.get_traces(
+            clients=scoped_clients,
+            allowed_user_ids=allowed_user_ids,
+            scope_key=scope_key,
+            from_timestamp=from_ts,
+            to_timestamp=to_ts,
+            fetch_all=False,
+            limit=500,
+        )
+
+        _dashboard_trace_cache[cache_key] = (_time.monotonic(), traces)
+
+        # Evict stale entries
+        now = _time.monotonic()
+        stale = [k for k, v in _dashboard_trace_cache.items() if (now - v[0]) > _DASHBOARD_TRACE_TTL * 2]
+        for k in stale:
+            _dashboard_trace_cache.pop(k, None)
+
+        return traces
 
 
 @router.get("/sections/observability-health", response_model=DashboardSectionResponse, status_code=200)
