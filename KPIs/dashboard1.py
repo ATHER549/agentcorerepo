@@ -8,7 +8,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import String, cast, func, or_
+from sqlalchemy import func, or_
 from sqlmodel import select
 
 from agentcore.api.utils import CurrentActiveUser, DbSession
@@ -309,8 +309,6 @@ async def get_governance_guardrail_kpis(
             raise HTTPException(status_code=403, detail="org_id not in your scope")
         if org_id:
             org_ids = {org_id}
-    elif role == "root" and org_id:
-        org_ids = {org_id}
 
     agent_scope_filters = []
     if org_ids is not None:
@@ -346,7 +344,7 @@ async def get_governance_guardrail_kpis(
         select(func.count(func.distinct(AgentBundle.agent_id)))
         .select_from(AgentBundle)
         .join(Agent, Agent.id == AgentBundle.agent_id, isouter=True)
-        .where(AgentBundle.bundle_type == BundleTypeEnum.GUARDRAIL, Agent.deleted_at.is_(None))
+        .where(AgentBundle.bundle_type == BundleTypeEnum.GUARDRAIL)
     )
     if org_ids is not None:
         guardrail_stmt = guardrail_stmt.where(func.coalesce(AgentBundle.org_id, Agent.org_id).in_(list(org_ids)))
@@ -371,12 +369,10 @@ async def get_governance_guardrail_kpis(
 
     # Policy Breach Attempts: violations from prompt-injection / jailbreak guardrails only.
     # Step 1: Get IDs of guardrails with matching categories
-    breach_category_stmt = select(
-        cast(GuardrailCatalogue.id, String)
-    ).where(
+    breach_category_stmt = select(GuardrailCatalogue.id).where(
         GuardrailCatalogue.category.in_(["prompt-injection", "jailbreak"])
     )
-    breach_guardrail_ids = list((await session.exec(breach_category_stmt)).all())
+    breach_guardrail_ids = [str(row) for row in (await session.exec(breach_category_stmt)).all()]
 
     # Step 2: Count violations matching those guardrail IDs
     breach_count = 0
@@ -1301,13 +1297,8 @@ async def _fetch_observability_traces(
     current_user: CurrentActiveUser,
     org_id: UUID | None,
     from_days: int = 30,
-    limit: int = 2000,
 ):
-    """Fetch enriched traces scoped to the user's org for dashboard KPIs.
-
-    Uses a capped limit instead of fetch_all to prevent unbounded memory
-    usage when multiple dashboard endpoints call this concurrently.
-    """
+    """Fetch enriched traces scoped to the user's org for dashboard KPIs."""
     from agentcore.api.observability.scope import resolve_scope_context
     from agentcore.api.observability.trace_store import TraceStore
     from agentcore.api.observability.parsing import compute_date_range, clear_request_caches
@@ -1334,8 +1325,7 @@ async def _fetch_observability_traces(
         scope_key=scope_key,
         from_timestamp=from_ts,
         to_timestamp=to_ts,
-        fetch_all=False,
-        limit=limit,
+        fetch_all=True,
     )
     return traces
 
