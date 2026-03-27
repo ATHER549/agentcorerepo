@@ -891,8 +891,13 @@ export default function DashboardAdmin(): JSX.Element {
         const dv = gsv(sc?.data, "Desired Replicas (HPA)"); let se = 0; for (let i = 1; i < dv.length; i++) if (dv[i] !== dv[i-1]) se++;
         const rv = gsv(sc?.data, "Running Pods"); const runningPods = rv.length > 0 ? Math.round(rv[rv.length - 1]) : null;
         const cpuMemValue = cpuv != null || memv != null ? `${cpuv != null ? formatPercentMetric(cpuv) : "--"} / ${memv != null ? formatPercentMetric(memv) : "--"}` : "0%";
-        setPlatformKpis([{ name: "Platform Uptime %", value: uv != null ? `${uv.toFixed(2)}%` : "0%" }, { name: "API Latency P95", value: p95v != null ? `${Math.round(p95v)}ms` : "0ms" }, { name: "API Latency P99", value: p99v != null ? `${Math.round(p99v)}ms` : "0ms" }, { name: "Error Rate %", value: erv != null ? `${erv.toFixed(2)}%` : "0%" }, { name: "Running Pods", value: runningPods != null ? `${runningPods}` : "0" }, { name: "AKS Pod Scaling Events", value: `${se}` }, { name: "CPU/Memory Saturation %", value: cpuMemValue }]);
-      }).catch(() => setPlatformKpis(platformKpiFallback));
+        const promKpis = [{ name: "Platform Uptime %", value: uv != null ? `${uv.toFixed(2)}%` : "0%" }, { name: "API Latency P95", value: p95v != null ? `${Math.round(p95v)}ms` : "0ms" }, { name: "API Latency P99", value: p99v != null ? `${Math.round(p99v)}ms` : "0ms" }, { name: "Error Rate %", value: erv != null ? `${erv.toFixed(2)}%` : "0%" }, { name: "Running Pods", value: runningPods != null ? `${runningPods}` : "0" }, { name: "AKS Pod Scaling Events", value: `${se}` }, { name: "CPU/Memory Saturation %", value: cpuMemValue }];
+        const promNames = new Set(promKpis.map((k) => k.name));
+        setPlatformKpis((prev) => {
+          const base = prev ?? platformKpiFallback;
+          return [...base.filter((k) => !promNames.has(k.name)), ...promKpis];
+        });
+      }).catch(() => {});
   }, [isSuperAdmin, refreshTick]);
   useEffect(() => {
     if (!isSuperAdmin) return;
