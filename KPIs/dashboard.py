@@ -1315,6 +1315,11 @@ async def _fetch_observability_traces(
     Multiple dashboard endpoints call this concurrently on page load.
     The lock ensures only ONE Langfuse fetch happens; others wait and
     reuse the cached result.
+
+    TraceStore.get_traces() is SYNCHRONOUS (HTTP calls + thread-pool
+    enrichment) so it MUST run in asyncio.to_thread() to avoid blocking
+    the event loop — otherwise every other request (including non-dashboard)
+    hangs until the Langfuse fetch completes.
     """
     cache_key = f"{current_user.id}:{org_id}:{from_days}"
 
@@ -1347,7 +1352,10 @@ async def _fetch_observability_traces(
 
         from_ts, to_ts = compute_date_range(None, None, None, default_days=from_days)
 
-        traces, _ = TraceStore.get_traces(
+        # Run the SYNCHRONOUS Langfuse fetch in a thread pool so the
+        # event loop stays free to serve other requests.
+        traces, _ = await asyncio.to_thread(
+            TraceStore.get_traces,
             clients=scoped_clients,
             allowed_user_ids=allowed_user_ids,
             scope_key=scope_key,
