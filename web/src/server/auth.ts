@@ -890,6 +890,21 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
           // Azure AD SSO tokens are already validated via JWKS in the CredentialsProvider
           if (account?.provider === "azure-ad-sso") return true;
 
+          // Azure AD may not return "email" — fall back to preferred_username or upn
+          if (
+            !user.email &&
+            profile &&
+            (account?.provider === "azure-ad" ||
+              account?.provider === "azure-ad-sso")
+          ) {
+            const fallbackEmail =
+              (profile as Record<string, unknown>).preferred_username ??
+              (profile as Record<string, unknown>).upn;
+            if (typeof fallbackEmail === "string") {
+              user.email = fallbackEmail;
+            }
+          }
+
           // Block sign in without valid user.email
           const email = user.email?.toLowerCase();
           if (!email) {
