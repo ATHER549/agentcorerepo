@@ -8,6 +8,7 @@ interface AuthProviderButtonProps {
   onClick?: () => void;
   loading?: boolean;
   showLastUsedBadge?: boolean;
+  prominent?: boolean;
 }
 
 export function AuthProviderButton({
@@ -16,14 +17,19 @@ export function AuthProviderButton({
   onClick,
   loading = false,
   showLastUsedBadge = false,
+  prominent = false,
 }: AuthProviderButtonProps) {
   return (
-    <div>
+    <div className="w-full">
       <Button
         onClick={onClick}
-        variant="secondary"
+        variant={prominent ? "default" : "secondary"}
         loading={loading}
-        className="w-full"
+        className={cn(
+          "w-full",
+          prominent &&
+            "bg-red-600 py-6 text-base text-white shadow-md hover:bg-red-700",
+        )}
       >
         {icon}
         {label}

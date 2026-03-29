@@ -31,6 +31,10 @@ import { useRouter } from "next/router";
 import { getSafeRedirectPath } from "@/src/utils/redirect";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
 import useLocalStorage from "@/src/components/useLocalStorage";
+import {
+  canUsePasswordSignUp,
+  shouldShowSignUpDiscoveryForm,
+} from "@/src/features/auth/lib/authPageMode";
 
 // Use the same getServerSideProps function as src/pages/auth/sign-in.tsx
 export { getServerSideProps } from "@/src/pages/auth/sign-in";
@@ -39,6 +43,7 @@ type NextAuthProvider = NonNullable<Parameters<typeof signIn>[0]>;
 
 export default function SignIn({
   authProviders,
+  signUpDisabled,
   runningOnHuggingFaceSpaces,
 }: PageProps) {
   useHuggingFaceRedirect(runningOnHuggingFaceSpaces);
@@ -56,11 +61,24 @@ export default function SignIn({
     : undefined;
 
   const [formError, setFormError] = useState<string | null>(null);
+  const passwordSignUpEnabled = canUsePasswordSignUp({
+    authProviders,
+    signUpDisabled,
+    publicSignUpDisabled: env.NEXT_PUBLIC_SIGN_UP_DISABLED,
+  });
+  const showDiscoveryForm = shouldShowSignUpDiscoveryForm({
+    authProviders,
+    signUpDisabled,
+    publicSignUpDisabled: env.NEXT_PUBLIC_SIGN_UP_DISABLED,
+  });
+  const hasStaticSsoProvider = Object.entries(authProviders).some(
+    ([name, enabled]) => enabled && name !== "credentials" && name !== "sso",
+  );
 
   // Two-step login flow: ask for email first, detect SSO, then either redirect to SSO or reveal password field.
   // Skip this flow when no SSO is configured - show password field immediately
   const [showPasswordStep, setShowPasswordStep] = useState<boolean>(
-    !authProviders.sso,
+    passwordSignUpEnabled && !authProviders.sso,
   );
   const [continueLoading, setContinueLoading] = useState<boolean>(false);
   const [lastUsedAuthMethod, setLastUsedAuthMethod] =
@@ -129,6 +147,13 @@ export default function SignIn({
 
         void signIn(providerId);
         return; // stop further execution – page redirect expected
+      }
+
+      if (!passwordSignUpEnabled) {
+        setFormError(
+          "No SSO provider is configured for this email domain. Contact your administrator.",
+        );
+        return;
       }
 
       // No SSO – fall back to password step
@@ -212,90 +237,96 @@ export default function SignIn({
         <CloudRegionSwitch isSignUpPage />
 
         <div className="bg-background mt-14 px-6 py-10 shadow-sm sm:mx-auto sm:w-full sm:max-w-[480px] sm:rounded-lg sm:px-10">
-          <Form {...form}>
-            <form
-              className="space-y-6"
-              onSubmit={
-                showPasswordStep
-                  ? form.handleSubmit(onSubmit)
-                  : (e) => {
-                      e.preventDefault();
-                      void handleContinue();
-                    }
-              }
-            >
-              {showPasswordStep && (
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Name</FormLabel>
-                      <FormControl>
-                        <Input placeholder="Jane Doe" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder="jsdoe@example.com"
-                        allowPasswordManager
-                        autoComplete="email"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              {showPasswordStep && (
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Password</FormLabel>
-                      <FormControl>
-                        <PasswordInput {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              )}
-              <Button
-                type="submit"
-                className="w-full"
-                loading={
+          {showDiscoveryForm ? (
+            <Form {...form}>
+              <form
+                className="space-y-6"
+                onSubmit={
                   showPasswordStep
-                    ? form.formState.isSubmitting
-                    : continueLoading
+                    ? form.handleSubmit(onSubmit)
+                    : (e) => {
+                        e.preventDefault();
+                        void handleContinue();
+                      }
                 }
-                disabled={
-                  showPasswordStep
-                    ? false // Form validation handles this via handleSubmit
-                    : form.watch("email") === ""
-                }
-                data-testid="submit-email-password-sign-up-form"
               >
-                {showPasswordStep ? "Sign up" : "Continue"}
-              </Button>
-              {formError ? (
-                <div className="text-destructive text-center text-sm font-medium">
-                  {formError}
-                </div>
-              ) : null}
-            </form>
-          </Form>
+                {passwordSignUpEnabled && showPasswordStep && (
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Name</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Jane Doe" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+                <FormField
+                  control={form.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Email</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="jsdoe@example.com"
+                          allowPasswordManager
+                          autoComplete="email"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                {passwordSignUpEnabled && showPasswordStep && (
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Password</FormLabel>
+                        <FormControl>
+                          <PasswordInput {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+                <Button
+                  type="submit"
+                  className="w-full"
+                  loading={
+                    showPasswordStep
+                      ? form.formState.isSubmitting
+                      : continueLoading
+                  }
+                  disabled={
+                    showPasswordStep ? false : form.watch("email") === ""
+                  }
+                  data-testid="submit-email-password-sign-up-form"
+                >
+                  {showPasswordStep ? "Sign up" : "Continue"}
+                </Button>
+                {formError ? (
+                  <div className="text-destructive text-center text-sm font-medium">
+                    {formError}
+                  </div>
+                ) : null}
+              </form>
+            </Form>
+          ) : (
+            <div className="text-muted-foreground text-center text-sm">
+              {hasStaticSsoProvider
+                ? "Sign up with email and password is disabled for this instance. Continue with SSO below."
+                : "Sign up is not available on this instance. Contact your administrator."}
+            </div>
+          )}
           <SSOButtons
             authProviders={authProviders}
             action="sign up"

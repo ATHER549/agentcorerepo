@@ -28,6 +28,7 @@
   "dependencies": {
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@appsignal/opentelemetry-instrumentation-bullmq": "^0.7.3",
+    "@azure/msal-browser": "^5.6.1",
     "@baselime/trpc-opentelemetry-middleware": "^0.1.2",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/language": "^6.12.2",
@@ -124,6 +125,7 @@
     "https-proxy-agent": "^7.0.6",
     "ioredis": "^5.8.2",
     "ip-address": "^9.0.5",
+    "jose": "^6.2.2",
     "json-schema-faker": "^0.5.9",
     "langchain": "^1.2.15",
     "langfuse": "3.38.4",

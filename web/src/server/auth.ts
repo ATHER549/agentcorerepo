@@ -158,6 +158,86 @@ const staticProviders: Provider[] = [
   }),
 ];
 
+// Azure AD Public Client SSO — MSAL popup + JWKS validation (no client secret)
+if (env.AUTH_AZURE_AD_PUBLIC_CLIENT_ID && env.AUTH_AZURE_AD_PUBLIC_TENANT_ID) {
+  staticProviders.push(
+    CredentialsProvider({
+      id: "azure-ad-sso",
+      name: "Azure AD SSO",
+      credentials: {
+        idToken: { label: "ID Token", type: "text" },
+      },
+      async authorize(credentials) {
+        if (!credentials?.idToken) throw new Error("No ID token provided");
+
+        const { jwtVerify, createRemoteJWKSet } = await import("jose");
+
+        const JWKS = createRemoteJWKSet(
+          new URL(
+            "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+          ),
+        );
+
+        const { payload } = await jwtVerify(credentials.idToken, JWKS, {
+          audience: env.AUTH_AZURE_AD_PUBLIC_CLIENT_ID,
+          issuer: `https://login.microsoftonline.com/${env.AUTH_AZURE_AD_PUBLIC_TENANT_ID}/v2.0`,
+        }).catch((err) => {
+          logger.error("Invalid Azure AD token", err);
+          throw new Error("Invalid Azure AD token");
+        });
+
+        const email = (
+          (payload.email as string) ??
+          (payload.preferred_username as string) ??
+          ""
+        ).toLowerCase();
+        if (!email) throw new Error("No email in Azure AD token");
+
+        const name =
+          (payload.name as string) ?? email.split("@")[0] ?? "Azure AD User";
+
+        // Find existing user or create new one
+        let dbUser = await prisma.user.findUnique({ where: { email } });
+
+        if (!dbUser) {
+          if (
+            env.NEXT_PUBLIC_SIGN_UP_DISABLED === "true" ||
+            env.AUTH_DISABLE_SIGNUP === "true"
+          ) {
+            throw new Error("Sign up is disabled.");
+          }
+
+          try {
+            dbUser = await prisma.user.create({
+              data: {
+                email,
+                name,
+                emailVerified: new Date(),
+              },
+            });
+            await createProjectMembershipsOnSignup(dbUser);
+          } catch (e) {
+            // Race condition: user may have been created by another request
+            dbUser = await prisma.user.findUnique({ where: { email } });
+            if (!dbUser) throw e;
+          }
+        }
+
+        return {
+          id: dbUser.id,
+          name: dbUser.name,
+          email: dbUser.email,
+          image: dbUser.image,
+          emailVerified: dbUser.emailVerified?.toISOString(),
+          featureFlags: parseFlags(dbUser.featureFlags),
+          canCreateOrganizations: canCreateOrganizations(dbUser.email),
+          organizations: [],
+        };
+      },
+    }),
+  );
+}
+
 // Password-reset for password reset of credentials provider
 if (env.SMTP_CONNECTION_URL && env.EMAIL_FROM_ADDRESS) {
   staticProviders.push(
@@ -807,6 +887,9 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
       },
       async signIn({ user, account, profile }) {
         return instrumentAsync({ name: "next-auth-sign-in" }, async (span) => {
+          // Azure AD SSO tokens are already validated via JWKS in the CredentialsProvider
+          if (account?.provider === "azure-ad-sso") return true;
+
           // Block sign in without valid user.email
           const email = user.email?.toLowerCase();
           if (!email) {

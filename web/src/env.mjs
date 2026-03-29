@@ -125,6 +125,8 @@ export const env = createEnv({
     AUTH_AZURE_AD_ALLOW_ACCOUNT_LINKING: z.enum(["true", "false"]).optional(),
     AUTH_AZURE_AD_CLIENT_AUTH_METHOD: zAuthMethod,
     AUTH_AZURE_AD_CHECKS: zAuthChecks,
+    AUTH_AZURE_AD_PUBLIC_CLIENT_ID: z.string().optional(),
+    AUTH_AZURE_AD_PUBLIC_TENANT_ID: z.string().optional(),
     AUTH_OKTA_CLIENT_ID: z.string().optional(),
     AUTH_OKTA_CLIENT_SECRET: z.string().optional(),
     AUTH_OKTA_ISSUER: z.string().optional(),
@@ -453,6 +455,8 @@ export const env = createEnv({
     NEXT_PUBLIC_PLAIN_APP_ID: z.string().optional(),
     NEXT_PUBLIC_BUILD_ID: z.string().optional(),
     NEXT_PUBLIC_BASE_PATH: z.string().optional(),
+    NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_CLIENT_ID: z.string().optional(),
+    NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_TENANT_ID: z.string().optional(),
     NEXT_PUBLIC_LANGFUSE_PLAYGROUND_STREAMING_ENABLED_DEFAULT: z
       .enum(["true", "false"])
       .optional()
@@ -535,6 +539,8 @@ export const env = createEnv({
       process.env.AUTH_AZURE_CLIENT_AUTH_METHOD, // fallback on old env var
     AUTH_AZURE_AD_CHECKS:
       process.env.AUTH_AZURE_AD_CHECKS ?? process.env.AUTH_AZURE_CHECKS, // fallback on old env var
+    AUTH_AZURE_AD_PUBLIC_CLIENT_ID: process.env.AUTH_AZURE_AD_PUBLIC_CLIENT_ID,
+    AUTH_AZURE_AD_PUBLIC_TENANT_ID: process.env.AUTH_AZURE_AD_PUBLIC_TENANT_ID,
     AUTH_OKTA_CLIENT_ID: process.env.AUTH_OKTA_CLIENT_ID,
     AUTH_OKTA_CLIENT_SECRET: process.env.AUTH_OKTA_CLIENT_SECRET,
     AUTH_OKTA_ISSUER: process.env.AUTH_OKTA_ISSUER,
@@ -749,6 +755,10 @@ export const env = createEnv({
     LANGFUSE_INIT_USER_NAME: process.env.LANGFUSE_INIT_USER_NAME,
     LANGFUSE_INIT_USER_PASSWORD: process.env.LANGFUSE_INIT_USER_PASSWORD,
     NEXT_PUBLIC_BASE_PATH: process.env.NEXT_PUBLIC_BASE_PATH,
+    NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_CLIENT_ID:
+      process.env.NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_CLIENT_ID,
+    NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_TENANT_ID:
+      process.env.NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_TENANT_ID,
     LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT:
       process.env.LANGFUSE_MAX_HISTORIC_EVAL_CREATION_LIMIT,
     SLACK_CLIENT_ID: process.env.SLACK_CLIENT_ID,

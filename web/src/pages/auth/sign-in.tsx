@@ -44,6 +44,10 @@ import { AuthProviderButton } from "@/src/features/auth/components/AuthProviderB
 import { cn } from "@/src/utils/tailwind";
 import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
 import { getSafeRedirectPath } from "@/src/utils/redirect";
+import {
+  canUsePasswordSignIn,
+  shouldShowSignInDiscoveryForm,
+} from "@/src/features/auth/lib/authPageMode";
 
 const credentialAuthForm = z.object({
   email: z.string().email(),
@@ -86,6 +90,7 @@ export type PageProps = {
           name: string;
         }
       | false;
+    azureAdPublicClient: boolean;
     sso: boolean;
   };
   runningOnHuggingFaceSpaces: boolean;
@@ -170,6 +175,9 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
           env.AUTH_CUSTOM_NAME !== undefined
             ? { name: env.AUTH_CUSTOM_NAME }
             : false,
+        azureAdPublicClient:
+          env.AUTH_AZURE_AD_PUBLIC_CLIENT_ID !== undefined &&
+          env.AUTH_AZURE_AD_PUBLIC_TENANT_ID !== undefined,
         sso,
       },
       signUpDisabled: env.AUTH_DISABLE_SIGNUP === "true",
@@ -182,6 +190,69 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
 };
 
 type NextAuthProvider = NonNullable<Parameters<typeof signIn>[0]>;
+
+// Azure AD Public Client SSO button — uses MSAL popup (no client secret)
+function AzureAdSsoButton() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    setLoading(true);
+    setError(null);
+    try {
+      const { PublicClientApplication } = await import("@azure/msal-browser");
+
+      const msalInstance = new PublicClientApplication({
+        auth: {
+          clientId: env.NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_CLIENT_ID!,
+          authority: `https://login.microsoftonline.com/${env.NEXT_PUBLIC_AUTH_AZURE_AD_PUBLIC_TENANT_ID}`,
+          redirectUri: window.location.origin,
+        },
+        cache: { cacheLocation: "sessionStorage" },
+      });
+
+      await msalInstance.initialize();
+
+      const response = await msalInstance.loginPopup({
+        scopes: ["openid", "profile", "email"],
+      });
+
+      if (!response.idToken) {
+        throw new Error("No ID token returned from Azure AD");
+      }
+
+      const result = await signIn("azure-ad-sso", {
+        idToken: response.idToken,
+        redirect: false,
+      });
+
+      if (result?.ok) {
+        window.location.href = "/";
+      } else {
+        setError(result?.error ?? "Sign in failed");
+      }
+    } catch (err) {
+      console.error("Azure AD SSO error:", err);
+      setError(err instanceof Error ? err.message : "Azure AD SSO failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <AuthProviderButton
+        icon={<TbBrandAzure className="mr-3" size={18} />}
+        label="Azure AD SSO"
+        onClick={handleClick}
+        loading={loading}
+      />
+      {error && (
+        <p className="text-destructive mt-2 text-center text-xs">{error}</p>
+      )}
+    </div>
+  );
+}
 
 // Also used in src/pages/auth/sign-up.tsx
 export function SSOButtons({
@@ -233,14 +304,14 @@ export function SSOButtons({
       <div>
         {showSeparator ? (
           action === "sign in" ? (
-            <div className="border-border my-6 border-t"></div>
+            <div className="border-border my-4 border-t"></div>
           ) : (
-            <div className="text-muted-foreground my-6 text-center text-xs">
+            <div className="text-muted-foreground my-4 text-center text-xs">
               or {action} with
             </div>
           )
         ) : null}
-        <div className="flex flex-row flex-wrap items-center justify-center gap-2">
+        <div className="flex flex-col items-center justify-center gap-3">
           {authProviders.google && (
             <AuthProviderButton
               icon={<SiGoogle className="mr-3" size={18} />}
@@ -287,15 +358,17 @@ export function SSOButtons({
           )}
           {authProviders.azureAd && (
             <AuthProviderButton
-              icon={<TbBrandAzure className="mr-3" size={18} />}
-              label="Azure AD"
+              icon={<TbBrandAzure className="mr-3" size={20} />}
+              label="Continue with Microsoft SSO"
               onClick={() => handleSignIn("azure-ad")}
               loading={providerSigningIn === "azure-ad"}
               showLastUsedBadge={
                 hasMultipleAuthMethods && lastUsedMethod === "azure-ad"
               }
+              prominent
             />
           )}
+          {authProviders.azureAdPublicClient && <AzureAdSsoButton />}
           {authProviders.okta && (
             <AuthProviderButton
               icon={<SiOkta className="mr-3" size={18} />}
@@ -567,10 +640,12 @@ export default function SignIn({
   const [credentialsFormError, setCredentialsFormError] = useState<
     string | null
   >(errorMessage);
+  const passwordSignInEnabled = canUsePasswordSignIn(authProviders);
+  const showDiscoveryForm = shouldShowSignInDiscoveryForm(authProviders);
   // Two-step login flow: ask for email first, detect SSO, then either redirect to SSO or reveal password field.
   // Skip this flow when no SSO is configured - show password field immediately
   const [showPasswordStep, setShowPasswordStep] = useState<boolean>(
-    !authProviders.sso,
+    passwordSignInEnabled && !authProviders.sso,
   );
   const [continueLoading, setContinueLoading] = useState<boolean>(false);
   const [lastUsedAuthMethod, setLastUsedAuthMethod] =
@@ -692,6 +767,13 @@ export default function SignIn({
         return; // stop further execution – page redirect expected
       }
 
+      if (!passwordSignInEnabled) {
+        setCredentialsFormError(
+          "No SSO provider is configured for this email domain. Contact your administrator.",
+        );
+        return;
+      }
+
       // No SSO – fall back to password step
       setShowPasswordStep(true);
 
@@ -721,157 +803,189 @@ export default function SignIn({
       <Head>
         <title>Sign in | Langfuse</title>
       </Head>
-      <div className="flex flex-1 flex-col py-6 sm:min-h-full sm:justify-center sm:px-6 sm:py-12 lg:px-8">
-        <div className="sm:mx-auto sm:w-full sm:max-w-md">
-          <LangfuseIcon className="mx-auto" />
-          <h2 className="text-primary mt-4 text-center text-2xl leading-9 font-bold tracking-tight">
-            Sign in to your account
-          </h2>
+      <div className="flex min-h-screen">
+        {/* Left panel — branding */}
+        <div className="hidden bg-white lg:flex lg:w-1/2 lg:flex-col lg:justify-center lg:px-16 xl:px-24">
+          <div className="flex items-center gap-3">
+            <LangfuseIcon size={48} />
+            <span className="text-4xl font-bold tracking-tight text-gray-900">
+              Langfuse
+            </span>
+          </div>
         </div>
 
-        {isLangfuseCloud && (
-          <div className="bg-card mt-4 -mb-4 rounded-lg p-3 text-center text-sm sm:mx-auto sm:w-full sm:max-w-[480px] sm:rounded-lg sm:px-6">
-            If you are experiencing issues signing in, please force refresh this
-            page (CMD + SHIFT + R) or clear your browser cache.{" "}
-            <a
-              href="mailto:support@langfuse.com"
-              className="text-primary-accent hover:text-hover-primary-accent cursor-pointer text-xs font-medium whitespace-nowrap"
-            >
-              (contact us)
-            </a>
+        {/* Right panel — sign-in form */}
+        <div className="flex w-full flex-col items-center justify-center bg-slate-50 px-6 py-12 lg:w-1/2">
+          {/* Mobile logo — only visible on small screens */}
+          <div className="mb-8 flex items-center gap-2 lg:hidden">
+            <LangfuseIcon size={28} />
+            <span className="text-xl font-bold tracking-tight text-gray-900">
+              Langfuse
+            </span>
           </div>
-        )}
 
-        <CloudRegionSwitch />
+          <div className="w-full max-w-md">
+            <div className="rounded-2xl border border-gray-100 bg-white px-8 py-10 shadow-lg">
+              <h2 className="mb-2 text-center text-2xl font-bold text-gray-900">
+                Welcome back.
+              </h2>
+              <p className="mb-8 text-center text-sm text-gray-500">
+                Sign in to your account to continue.
+              </p>
 
-        <div className="bg-background mt-14 px-6 py-10 shadow-sm sm:mx-auto sm:w-full sm:max-w-[480px] sm:rounded-lg sm:px-10">
-          <div className="space-y-6">
-            {/* Email / (optional) password form – only when credentials auth is enabled */}
-            {authProviders.credentials && (
-              <div>
-                <Form {...credentialsForm}>
-                  <form
-                    className="space-y-6"
-                    onSubmit={
-                      showPasswordStep
-                        ? credentialsForm.handleSubmit(onCredentialsSubmit)
-                        : (e) => {
-                            e.preventDefault();
-                            void handleContinue();
-                          }
-                    }
+              {isLangfuseCloud && (
+                <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50 p-3 text-center text-sm text-blue-700">
+                  If you are experiencing issues signing in, please force
+                  refresh this page (CMD + SHIFT + R) or clear your browser
+                  cache.{" "}
+                  <a
+                    href="mailto:support@langfuse.com"
+                    className="font-medium whitespace-nowrap underline"
                   >
-                    {/* Email input – always visible */}
-                    <FormField
-                      control={credentialsForm.control}
-                      name="email"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Email</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="jsdoe@example.com"
-                              allowPasswordManager
-                              autoComplete="email"
-                              {...field}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Password only shown once we know SSO is not configured */}
-                    {showPasswordStep && (
-                      <FormField
-                        control={credentialsForm.control}
-                        name="password"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>
-                              Password{" "}
-                              <Link
-                                href="/auth/reset-password"
-                                className="text-primary-accent hover:text-hover-primary-accent ml-1 text-xs"
-                                tabIndex={-1}
-                                title="What is this?"
-                              >
-                                (forgot password?)
-                              </Link>
-                            </FormLabel>
-                            <FormControl>
-                              <PasswordInput {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    )}
-
-                    {/* Primary action button */}
-                    <Button
-                      type="submit"
-                      className="w-full"
-                      loading={
-                        showPasswordStep
-                          ? credentialsForm.formState.isSubmitting
-                          : continueLoading
-                      }
-                      disabled={
-                        credentialsForm.watch("email") === "" ||
-                        (showPasswordStep &&
-                          credentialsForm.watch("password") === "")
-                      }
-                      data-testid="submit-email-password-sign-in-form"
-                    >
-                      {showPasswordStep ? "Sign in" : "Continue"}
-                    </Button>
-                  </form>
-                </Form>
-                <div
-                  className={cn(
-                    "text-muted-foreground mt-1 text-center text-xs",
-                    hasMultipleAuthMethods &&
-                      lastUsedAuthMethod === "credentials"
-                      ? "block"
-                      : "hidden",
-                  )}
-                >
-                  Last used
+                    Contact us
+                  </a>
                 </div>
-              </div>
-            )}
-            {credentialsFormError ? (
-              <div className="text-destructive text-center text-sm font-medium">
-                {credentialsFormError}
-                <br />
-                Contact support if this error is unexpected.{" "}
-                {isLangfuseCloud &&
-                  "Make sure you are using the correct cloud data region."}
-              </div>
-            ) : null}
-            <SSOButtons
-              authProviders={authProviders}
-              lastUsedMethod={lastUsedAuthMethod}
-              onProviderSelect={setLastUsedAuthMethod}
-            />
-          </div>
+              )}
 
-          {!signUpDisabled &&
-          env.NEXT_PUBLIC_SIGN_UP_DISABLED !== "true" &&
-          authProviders.credentials ? (
-            <p className="text-muted-foreground mt-10 text-center text-sm">
-              No account yet?{" "}
-              <Link
-                href={`/auth/sign-up${router.asPath.includes("?") ? router.asPath.substring(router.asPath.indexOf("?")) : ""}`}
-                className="text-primary-accent hover:text-hover-primary-accent leading-6 font-semibold"
-              >
-                Sign up
-              </Link>
+              <CloudRegionSwitch />
+
+              <div className="space-y-6">
+                {/* Email / (optional) password form – only when credentials auth is enabled */}
+                {showDiscoveryForm && (
+                  <div>
+                    <Form {...credentialsForm}>
+                      <form
+                        className="space-y-5"
+                        onSubmit={
+                          showPasswordStep
+                            ? credentialsForm.handleSubmit(onCredentialsSubmit)
+                            : (e) => {
+                                e.preventDefault();
+                                void handleContinue();
+                              }
+                        }
+                      >
+                        {/* Email input – always visible */}
+                        <FormField
+                          control={credentialsForm.control}
+                          name="email"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>Email</FormLabel>
+                              <FormControl>
+                                <Input
+                                  placeholder="jsdoe@example.com"
+                                  allowPasswordManager
+                                  autoComplete="email"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        {/* Password only shown once we know SSO is not configured */}
+                        {passwordSignInEnabled && showPasswordStep && (
+                          <FormField
+                            control={credentialsForm.control}
+                            name="password"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>
+                                  Password{" "}
+                                  <Link
+                                    href="/auth/reset-password"
+                                    className="text-primary-accent hover:text-hover-primary-accent ml-1 text-xs"
+                                    tabIndex={-1}
+                                    title="What is this?"
+                                  >
+                                    (forgot password?)
+                                  </Link>
+                                </FormLabel>
+                                <FormControl>
+                                  <PasswordInput {...field} />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        )}
+
+                        {/* Primary action button */}
+                        <Button
+                          type="submit"
+                          className="w-full"
+                          loading={
+                            showPasswordStep
+                              ? credentialsForm.formState.isSubmitting
+                              : continueLoading
+                          }
+                          disabled={
+                            credentialsForm.watch("email") === "" ||
+                            (passwordSignInEnabled &&
+                              showPasswordStep &&
+                              credentialsForm.watch("password") === "")
+                          }
+                          data-testid="submit-email-password-sign-in-form"
+                        >
+                          {showPasswordStep ? "Sign in" : "Continue"}
+                        </Button>
+                      </form>
+                    </Form>
+                    <div
+                      className={cn(
+                        "text-muted-foreground mt-1 text-center text-xs",
+                        passwordSignInEnabled &&
+                          hasMultipleAuthMethods &&
+                          lastUsedAuthMethod === "credentials"
+                          ? "block"
+                          : "hidden",
+                      )}
+                    >
+                      Last used
+                    </div>
+                  </div>
+                )}
+                {credentialsFormError ? (
+                  <div className="text-destructive text-center text-sm font-medium">
+                    {credentialsFormError}
+                    <br />
+                    Contact support if this error is unexpected.{" "}
+                    {isLangfuseCloud &&
+                      "Make sure you are using the correct cloud data region."}
+                  </div>
+                ) : null}
+                <SSOButtons
+                  authProviders={authProviders}
+                  lastUsedMethod={lastUsedAuthMethod}
+                  onProviderSelect={setLastUsedAuthMethod}
+                />
+              </div>
+
+              {!signUpDisabled &&
+              env.NEXT_PUBLIC_SIGN_UP_DISABLED !== "true" &&
+              passwordSignInEnabled ? (
+                <p className="text-muted-foreground mt-8 text-center text-sm">
+                  No account yet?{" "}
+                  <Link
+                    href={`/auth/sign-up${router.asPath.includes("?") ? router.asPath.substring(router.asPath.indexOf("?")) : ""}`}
+                    className="text-primary-accent hover:text-hover-primary-accent leading-6 font-semibold"
+                  >
+                    Sign up
+                  </Link>
+                </p>
+              ) : null}
+            </div>
+
+            <p className="mt-6 text-center text-xs text-gray-400">
+              By signing in, you agree to the Terms of Service and Privacy
+              Policy.
             </p>
-          ) : null}
+
+            <CloudPrivacyNotice action="signing in" />
+          </div>
         </div>
-        <CloudPrivacyNotice action="signing in" />
       </div>
     </>
   );
