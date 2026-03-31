@@ -75,111 +75,34 @@ async def _get_guardrail(
     session: AsyncSession,
     guardrail_id: UUID,
     environment: str | None = None,
-    guardrail_version_id: str | None = None,
 ) -> GuardrailCatalogue:
     """Look up a guardrail by ID.
 
-    Resolution order:
-    1. If *guardrail_version_id* is provided, load the snapshot from
-       ``guardrail_version`` and construct a virtual ``GuardrailCatalogue``
-       object from it (version-pinned execution).
-    2. If *environment* is ``"prod"`` (legacy fallback), resolve the latest
-       active version from ``guardrail_version``.
-    3. Otherwise, load the editable draft from ``guardrail_catalogue``.
+    When *environment* is ``"prod"``, the *guardrail_id* is treated as a UAT
+    source ID and the corresponding frozen prod copy is resolved instead.
     """
-    from app.models.guardrail_version import GuardrailVersion as GV
-
     logger.info(
-        "NeMo guardrail lookup started: guardrail_id=%s, environment=%s, version_id=%s",
-        guardrail_id, environment or "uat", guardrail_version_id,
+        "NeMo guardrail lookup started: guardrail_id=%s, environment=%s",
+        guardrail_id, environment or "uat",
     )
 
-    if guardrail_version_id:
-        # Version-pinned execution — load from guardrail_version snapshot
-        version_row = await session.get(GV, UUID(guardrail_version_id))
-        if not version_row:
-            msg = f"Guardrail version {guardrail_version_id} was not found."
-            logger.warning("NeMo guardrail lookup failed: %s", msg)
-            raise ValueError(msg)
-
-        # Construct a virtual GuardrailCatalogue from the snapshot
-        snapshot = version_row.guardrail_snapshot
-        row = GuardrailCatalogue(
-            id=version_row.guardrail_id,
-            name=snapshot.get("name", version_row.guardrail_name),
-            description=snapshot.get("description"),
-            framework=snapshot.get("framework", "nemo"),
-            provider=snapshot.get("provider", ""),
-            model_registry_id=UUID(snapshot["model_registry_id"]) if snapshot.get("model_registry_id") else None,
-            category=snapshot.get("category", ""),
-            status=snapshot.get("status", "active"),
-            rules_count=snapshot.get("rules_count", 0),
-            is_custom=snapshot.get("is_custom", False),
-            runtime_config=snapshot.get("runtime_config"),
-            visibility=snapshot.get("visibility", "private"),
-            public_scope=snapshot.get("public_scope"),
-            shared_user_ids=snapshot.get("shared_user_ids"),
-            public_dept_ids=snapshot.get("public_dept_ids"),
-            org_id=version_row.org_id,
-            dept_id=version_row.dept_id,
-        )
-        logger.info(
-            "NeMo guardrail lookup succeeded (version-pinned): "
-            "guardrail_id=%s, version_id=%s, version=v%d, name=%s",
-            guardrail_id, guardrail_version_id, version_row.version_number, row.name,
-        )
-        return row
-
     if environment == "prod":
-        # Legacy fallback — resolve latest active version from guardrail_version
-        stmt = (
-            select(GV)
-            .where(
-                GV.guardrail_id == guardrail_id,
-                GV.is_active.is_(True),
-            )
-            .order_by(GV.version_number.desc())
-            .limit(1)
+        # Resolve the prod copy via source_guardrail_id
+        stmt = select(GuardrailCatalogue).where(
+            GuardrailCatalogue.source_guardrail_id == guardrail_id,
+            GuardrailCatalogue.environment == "prod",
         )
         result = await session.execute(stmt)
-        version_row = result.scalars().first()
-        if not version_row:
+        row = result.scalars().first()
+        if not row:
             msg = (
-                f"No active production version found for guardrail {guardrail_id}. "
+                f"No production copy found for guardrail {guardrail_id}. "
                 "The guardrail may not have been promoted to prod yet."
             )
             logger.warning("NeMo guardrail lookup failed: %s", msg)
             raise ValueError(msg)
-
-        snapshot = version_row.guardrail_snapshot
-        row = GuardrailCatalogue(
-            id=version_row.guardrail_id,
-            name=snapshot.get("name", version_row.guardrail_name),
-            description=snapshot.get("description"),
-            framework=snapshot.get("framework", "nemo"),
-            provider=snapshot.get("provider", ""),
-            model_registry_id=UUID(snapshot["model_registry_id"]) if snapshot.get("model_registry_id") else None,
-            category=snapshot.get("category", ""),
-            status=snapshot.get("status", "active"),
-            rules_count=snapshot.get("rules_count", 0),
-            is_custom=snapshot.get("is_custom", False),
-            runtime_config=snapshot.get("runtime_config"),
-            visibility=snapshot.get("visibility", "private"),
-            public_scope=snapshot.get("public_scope"),
-            shared_user_ids=snapshot.get("shared_user_ids"),
-            public_dept_ids=snapshot.get("public_dept_ids"),
-            org_id=version_row.org_id,
-            dept_id=version_row.dept_id,
-        )
-        logger.info(
-            "NeMo guardrail lookup succeeded (legacy prod): "
-            "guardrail_id=%s, version=v%d, name=%s",
-            guardrail_id, version_row.version_number, row.name,
-        )
-        return row
-
-    # Default: load the editable draft from guardrail_catalogue
-    row = await session.get(GuardrailCatalogue, guardrail_id)
+    else:
+        row = await session.get(GuardrailCatalogue, guardrail_id)
 
     if not row:
         msg = f"Guardrail {guardrail_id} was not found."
@@ -193,8 +116,8 @@ async def _get_guardrail(
 
     logger.info(
         "NeMo guardrail lookup succeeded: "
-        "guardrail_id=%s, name=%s, model_registry_id=%s",
-        guardrail_id, row.name, row.model_registry_id,
+        "guardrail_id=%s, resolved_id=%s, environment=%s, name=%s, model_registry_id=%s",
+        guardrail_id, row.id, row.environment, row.name, row.model_registry_id,
     )
     return row
 
@@ -1332,25 +1255,19 @@ async def apply_nemo_guardrail_text(
     guardrail_id: str,
     session: AsyncSession,
     environment: str | None = None,
-    guardrail_version_id: str | None = None,
 ) -> GuardrailExecutionResult:
     """Apply NeMo guardrails to input_text using the guardrail identified by guardrail_id."""
     started_at = perf_counter()
     logger.info(
         "NeMo guardrail execution started: "
-        f"guardrail_id={guardrail_id}, input_length={len(input_text or '')}, "
-        f"version_id={guardrail_version_id}"
+        f"guardrail_id={guardrail_id}, input_length={len(input_text or '')}"
     )
     step = "parse_guardrail_id"
     try:
         guardrail_uuid = _to_uuid(guardrail_id)
 
         step = "lookup_guardrail"
-        guardrail = await _get_guardrail(
-            session, guardrail_uuid,
-            environment=environment,
-            guardrail_version_id=guardrail_version_id,
-        )
+        guardrail = await _get_guardrail(session, guardrail_uuid, environment=environment)
 
         step = "lookup_model_registry"
         model_config = await _get_model_registry_config(session, guardrail)
