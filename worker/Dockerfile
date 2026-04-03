@@ -14,9 +14,9 @@ RUN corepack enable
 RUN corepack prepare pnpm@10.33.0 --activate
 
 FROM --platform=${TARGETPLATFORM:-linux/amd64} alpine AS runtime-base
-# Remove package managers from the runtime image; only build stages need them.
-RUN rm -rf /usr/local/lib/node_modules/corepack /usr/local/lib/node_modules/npm && \
-    rm -f /usr/local/bin/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg
+# Remove build-only package managers. npm stays available until runtime dependencies are installed.
+RUN rm -rf /usr/local/lib/node_modules/corepack && \
+    rm -f /usr/local/bin/corepack /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 FROM --platform=${TARGETPLATFORM:-linux/amd64} build-base AS pruner
 
@@ -45,6 +45,7 @@ ARG NEXT_PUBLIC_POSTHOG_HOST
 
 # Copy source code of isolated subworkspace
 COPY --from=pruner /app/out/full/ .
+COPY scripts/resolve-keyvault-secrets.mjs ./scripts/
 
 RUN turbo run build --filter=worker...
 
@@ -74,6 +75,8 @@ RUN apk add --no-cache dumb-init
 
 WORKDIR /app
 
+RUN npm install --no-package-lock --no-save @azure/identity@4.13.1 @azure/keyvault-secrets@4.10.0 dotenv@16.6.1
+
 ARG NEXT_PUBLIC_BUILD_ID
 ENV BUILD_ID=$NEXT_PUBLIC_BUILD_ID
 
@@ -86,8 +89,11 @@ ARG GID=1001
 RUN addgroup --system --gid ${GID} expressjs
 RUN adduser --system --uid ${UID} expressjs
 
+COPY --from=builder --chown=expressjs:expressjs /app/scripts/resolve-keyvault-secrets.mjs ./scripts/resolve-keyvault-secrets.mjs
 COPY --from=prod-deps --chown=expressjs:expressjs /prod/worker ./worker
-RUN chmod +x ./worker/entrypoint.sh
+RUN chmod +x ./worker/entrypoint.sh && \
+    rm -rf /usr/local/lib/node_modules/npm && \
+    rm -f /usr/local/bin/npm /usr/local/bin/npx
 USER expressjs
 
 EXPOSE 3030

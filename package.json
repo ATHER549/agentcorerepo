@@ -48,7 +48,9 @@
     "husky": "^9.1.7",
     "prettier": "^3.8.1",
     "release-it": "^19.2.4",
-    "turbo": "2.8.20"
+    "turbo": "2.8.20",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.20.5"
   },
   "release-it": {
     "git": {
@@ -109,5 +111,9 @@
     "patchedDependencies": {
       "next-auth@4.24.13": "patches/next-auth@4.24.13.patch"
     }
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/keyvault-secrets": "^4.10.0"
   }
 }

@@ -13,3 +13,5 @@ README.md
 **/*.tsbuildinfo
 .git
 **/node_modules
+.env
+.env.*

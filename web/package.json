@@ -7,23 +7,23 @@
     "node": "24"
   },
   "scripts": {
-    "build": "INLINE_RUNTIME_CHUNK=false dotenv -e ../.env -- next build",
-    "build:check": "NEXT_DIST_DIR=.next-check INLINE_RUNTIME_CHUNK=false dotenv -e ../.env -- next build",
-    "typecheck": "dotenv -e ../.env -- tsgo -p tsconfig.build.json --noEmit --skipLibCheck --incremental --tsBuildInfoFile .tsbuildinfo",
-    "dev": "dotenv -e ../.env -- next dev",
-    "dev:http": "dotenv -e ../.env -- next dev --experimental-https --experimental-https-key ./localhost+1-key.pem --experimental-https-cert ./localhost+1.pem",
-    "lint": "dotenv -e ../.env -- eslint . --cache --cache-location .next/cache/eslint/ --max-warnings 0",
-    "lint:fix": "dotenv -e ../.env -- eslint . --cache --cache-location .next/cache/eslint/ --fix",
-    "analyze": "dotenv -e ../.env -- next experimental-analyze",
+    "build": "INLINE_RUNTIME_CHUNK=false node ../scripts/resolve-keyvault-secrets.mjs -- next build",
+    "build:check": "NEXT_DIST_DIR=.next-check INLINE_RUNTIME_CHUNK=false node ../scripts/resolve-keyvault-secrets.mjs -- next build",
+    "typecheck": "node ../scripts/resolve-keyvault-secrets.mjs -- tsgo -p tsconfig.build.json --noEmit --skipLibCheck --incremental --tsBuildInfoFile .tsbuildinfo",
+    "dev": "node ../scripts/resolve-keyvault-secrets.mjs -- next dev",
+    "dev:http": "node ../scripts/resolve-keyvault-secrets.mjs -- next dev --experimental-https --experimental-https-key ./localhost+1-key.pem --experimental-https-cert ./localhost+1.pem",
+    "lint": "node ../scripts/resolve-keyvault-secrets.mjs -- eslint . --cache --cache-location .next/cache/eslint/ --max-warnings 0",
+    "lint:fix": "node ../scripts/resolve-keyvault-secrets.mjs -- eslint . --cache --cache-location .next/cache/eslint/ --fix",
+    "analyze": "node ../scripts/resolve-keyvault-secrets.mjs -- next experimental-analyze",
     "clean": "rm -rf node_modules",
-    "start": "dotenv -e ../.env -- sh -c 'NEXT_MANUAL_SIG_HANDLE=true next start'",
+    "start": "node ../scripts/resolve-keyvault-secrets.mjs -- sh -c 'NEXT_MANUAL_SIG_HANDLE=true next start'",
     "test": "dotenv -e ../.env.test -e ../.env -- jest --verbose --runInBand --selectProjects server",
     "test-client": "dotenv -e ../.env.test -e ../.env -- jest --verbose --selectProjects client",
     "test:watch": "dotenv -e ../.env.test -e ../.env -- jest --watch --runInBand",
     "test:e2e": "dotenv -e ../.env.test -e ../.env -- playwright test --reporter=line",
     "test:e2e:server": "dotenv -e ../.env.test -e ../.env -- jest --runInBand --verbose --selectProjects e2e-server",
     "test:debug-handles": "dotenv -e ../.env.test -e ../.env -- jest --verbose --runInBand --detectOpenHandles --selectProjects server",
-    "build-trace": "dotenv -e ../.env -- next internal trace .next/trace-turbopack"
+    "build-trace": "node ../scripts/resolve-keyvault-secrets.mjs -- next internal trace .next/trace-turbopack"
   },
   "dependencies": {
     "@anthropic-ai/tokenizer": "^0.0.4",

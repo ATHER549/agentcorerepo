@@ -83,6 +83,7 @@ ENV SENTRY_RELEASE=$NEXT_PUBLIC_BUILD_ID
 
 # Copy source code of isolated subworkspace
 COPY --from=pruner /app/out/full/ .
+COPY scripts ./scripts
 
 # remove middleware.ts if it exists - not needed in self-hosted environments
 RUN rm -f ./web/src/middleware.ts
@@ -127,6 +128,7 @@ RUN addgroup --system --gid ${GID} nodejs
 RUN adduser --system --uid ${UID} nextjs
 
 RUN npm install -g --no-package-lock --no-save prisma@6.17.1
+RUN npm install --no-package-lock --no-save @azure/identity@4.13.1 @azure/keyvault-secrets@4.10.0 dotenv@16.6.1
 
 # Install dd-trace only if NEXT_PUBLIC_LANGFUSE_CLOUD_REGION is configured
 ARG NEXT_PUBLIC_LANGFUSE_CLOUD_REGION
@@ -154,6 +156,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/web/public ./web/public
 COPY --from=builder --chown=nextjs:nodejs /app/packages/shared/prisma ./packages/shared/prisma
 COPY --from=builder --chown=nextjs:nodejs /app/packages/shared/clickhouse ./packages/shared/clickhouse
 
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/resolve-keyvault-secrets.mjs ./scripts/resolve-keyvault-secrets.mjs
 COPY --chown=nextjs:nodejs ./web/entrypoint.sh ./web/entrypoint.sh
 COPY --chown=nextjs:nodejs ./packages/shared/scripts/cleanup.sql ./packages/shared/scripts/cleanup.sql
 RUN chmod +x ./web/entrypoint.sh

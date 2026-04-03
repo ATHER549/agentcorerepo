@@ -1,5 +1,14 @@
 #!/bin/sh
 
+# Resolve Azure Key Vault secrets into the current shell before migrations
+if [ -f ./scripts/resolve-keyvault-secrets.mjs ]; then
+    if ! keyvault_exports="$(node ./scripts/resolve-keyvault-secrets.mjs --export-shell)"; then
+        echo "Error: failed to resolve Azure Key Vault secrets."
+        exit 1
+    fi
+    eval "$keyvault_exports"
+fi
+
 # Run cleanup script before running migrations
 # Check if DATABASE_URL is not set
 if [ -z "$DATABASE_URL" ]; then
