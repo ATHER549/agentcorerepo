@@ -217,37 +217,30 @@ const applyAzureManagedRedisTokenToClient = async (
   const username = getRedisUsername();
 
   if (client instanceof Cluster) {
-    // Update the base options for any future nodes discovered
+    // Update the base redisOptions so every subsequently created node
+    // connection (including those from cluster slot refresh) uses the
+    // new token.
     client.options.redisOptions = client.options.redisOptions || {};
     client.options.redisOptions.username = username;
     client.options.redisOptions.password = accessToken.token;
 
-    // Update all currently connected nodes
-    const nodes = client.nodes("all");
-    await Promise.all(
-      nodes.map(async (node) => {
-        node.options.username = username;
-        node.options.password = accessToken.token;
-        if (node.status === "ready") {
-          if (username) {
-            await node.call("AUTH", username, accessToken.token);
-          } else {
-            await node.call("AUTH", accessToken.token);
-          }
-        }
-      }),
-    );
+    // Update each currently known node's options in place.
+    for (const node of client.nodes("all")) {
+      node.options.username = username;
+      node.options.password = accessToken.token;
+    }
+
+    // Force a full cluster reconnect. ioredis has no native streaming
+    // credential provider, so the most reliable way to re-authenticate
+    // every existing connection (including the ephemeral ones created
+    // during slot refresh) is to drop them and let ioredis reconnect
+    // with the updated redisOptions. Commands are queued during
+    // reconnect, so no data is lost.
+    client.disconnect(true);
   } else {
     client.options.username = username;
     client.options.password = accessToken.token;
-
-    if (client.status === "ready") {
-      if (username) {
-        await client.call("AUTH", username, accessToken.token);
-      } else {
-        await client.call("AUTH", accessToken.token);
-      }
-    }
+    client.disconnect(true);
   }
 };
 
