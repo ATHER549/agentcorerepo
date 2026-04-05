@@ -19,6 +19,9 @@ const EnvSchema = z.object({
     .nullable(),
   REDIS_AUTH: z.string().nullish(),
   REDIS_USERNAME: z.string().nullish(),
+  REDIS_USE_DEFAULT_AZURE_CREDENTIAL: z
+    .enum(["true", "false"])
+    .default("false"),
   REDIS_CONNECTION_STRING: z.string().nullish(),
   // Optional prefix for Redis keys. Used by BullMQ queues via their native prefix option
   // and by the singleton cache instance via ioredis keyPrefix. Useful for multi-tenant Redis.

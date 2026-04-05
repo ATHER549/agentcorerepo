@@ -160,6 +160,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1013.0
         version: 3.1013.0
+      '@azure/identity':
+        specifier: ^4.13.0
+        version: 4.13.1
       '@azure/storage-blob':
         specifier: ^12.26.0
         version: 12.26.0

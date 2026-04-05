@@ -1,5 +1,6 @@
 import Redis, { RedisOptions, Cluster, ClusterOptions } from "ioredis";
-import fs from "fs";
+import * as fs from "node:fs";
+import { DefaultAzureCredential } from "@azure/identity";
 import { env } from "../../env";
 import { logger } from "../logger";
 
@@ -11,6 +12,35 @@ const defaultRedisOptions: Partial<RedisOptions> = {
 };
 
 const REDIS_SCAN_COUNT = 1000;
+const AZURE_MANAGED_REDIS_SCOPE = "https://redis.azure.com/.default";
+const AZURE_MANAGED_REDIS_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const AZURE_MANAGED_REDIS_MIN_REFRESH_MS = 60 * 1000;
+
+type AzureRedisAccessToken = {
+  token: string;
+  expiresOnTimestamp: number;
+};
+
+const isAzureManagedRedisAuthEnabled =
+  env.REDIS_USE_DEFAULT_AZURE_CREDENTIAL === "true";
+
+const azureManagedIdentityClientId = process.env.AZURE_CLIENT_ID?.trim();
+
+const azureManagedRedisCredential = isAzureManagedRedisAuthEnabled
+  ? new DefaultAzureCredential(
+      azureManagedIdentityClientId
+        ? {
+            managedIdentityClientId: azureManagedIdentityClientId,
+            workloadIdentityClientId: azureManagedIdentityClientId,
+          }
+        : undefined,
+    )
+  : null;
+
+const azureManagedRedisClients = new Set<Redis | Cluster>();
+let azureManagedRedisToken: AzureRedisAccessToken | null = null;
+let azureManagedRedisTokenPromise: Promise<AzureRedisAccessToken> | null = null;
+let azureManagedRedisRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const redisQueueRetryOptions: Partial<RedisOptions> = {
   retryStrategy: (times: number) => {
@@ -63,6 +93,20 @@ const buildTlsOptions = (): Record<string, unknown> => {
     return {};
   }
 
+  let defaultServername: string | undefined;
+  if (env.REDIS_CONNECTION_STRING) {
+    try {
+      const url = new URL(env.REDIS_CONNECTION_STRING);
+      defaultServername = url.hostname;
+    } catch {
+      // ignore parsing errors
+    }
+  } else if (env.REDIS_CLUSTER_NODES) {
+    defaultServername = parseClusterNodes(env.REDIS_CLUSTER_NODES)[0]?.host;
+  } else if (env.REDIS_HOST) {
+    defaultServername = String(env.REDIS_HOST);
+  }
+
   return {
     tls: {
       ca: env.REDIS_TLS_CA_PATH
@@ -81,7 +125,9 @@ const buildTlsOptions = (): Record<string, unknown> => {
         : {}),
       ...(env.REDIS_TLS_SERVERNAME
         ? { servername: env.REDIS_TLS_SERVERNAME }
-        : {}),
+        : defaultServername
+          ? { servername: defaultServername }
+          : {}),
       ...(env.REDIS_TLS_CHECK_SERVER_IDENTITY === "false"
         ? { checkServerIdentity: () => undefined }
         : {}),
@@ -99,6 +145,202 @@ const buildTlsOptions = (): Record<string, unknown> => {
         : {}),
     },
   };
+};
+
+const getRedisUsername = (): string | undefined =>
+  env.REDIS_USERNAME || undefined;
+
+const getRedisPassword = (): string | undefined => env.REDIS_AUTH || undefined;
+
+const validateAzureManagedRedisConfig = (): string | null => {
+  if (!isAzureManagedRedisAuthEnabled) {
+    return null;
+  }
+
+  if (env.REDIS_TLS_ENABLED !== "true") {
+    return "REDIS_TLS_ENABLED must be true when REDIS_USE_DEFAULT_AZURE_CREDENTIAL is enabled";
+  }
+
+  if (!env.REDIS_USERNAME) {
+    return "REDIS_USERNAME must be set to the Microsoft Entra object ID for Azure Managed Redis authentication";
+  }
+
+  if (!env.REDIS_AUTH) {
+    return "REDIS_AUTH is missing. Start Langfuse through scripts/resolve-keyvault-secrets.mjs so the initial Azure Managed Redis token is injected before ioredis connects";
+  }
+
+  if (env.REDIS_SENTINEL_ENABLED === "true") {
+    return "Azure Managed Redis authentication via DefaultAzureCredential is not supported with Redis Sentinel mode";
+  }
+
+  return null;
+};
+
+const scheduleAzureManagedRedisRefresh = (
+  accessToken: AzureRedisAccessToken,
+): void => {
+  if (!isAzureManagedRedisAuthEnabled) return;
+
+  if (azureManagedRedisRefreshTimer) {
+    clearTimeout(azureManagedRedisRefreshTimer);
+  }
+
+  const refreshInMs = Math.max(
+    accessToken.expiresOnTimestamp -
+      Date.now() -
+      AZURE_MANAGED_REDIS_REFRESH_BUFFER_MS,
+    AZURE_MANAGED_REDIS_MIN_REFRESH_MS,
+  );
+
+  azureManagedRedisRefreshTimer = setTimeout(() => {
+    void refreshAzureManagedRedisAccessToken(true).catch((error) => {
+      logger.error("Failed to refresh Azure Managed Redis access token", error);
+      azureManagedRedisRefreshTimer = setTimeout(() => {
+        void refreshAzureManagedRedisAccessToken(true).catch((retryError) => {
+          logger.error(
+            "Retrying Azure Managed Redis access token refresh failed",
+            retryError,
+          );
+        });
+      }, AZURE_MANAGED_REDIS_MIN_REFRESH_MS);
+      azureManagedRedisRefreshTimer.unref?.();
+    });
+  }, refreshInMs);
+
+  azureManagedRedisRefreshTimer.unref?.();
+};
+
+const applyAzureManagedRedisTokenToClient = async (
+  client: Redis | Cluster,
+  accessToken: AzureRedisAccessToken,
+): Promise<void> => {
+  const username = getRedisUsername();
+
+  if (client instanceof Cluster) {
+    // Update the base options for any future nodes discovered
+    client.options.redisOptions = client.options.redisOptions || {};
+    client.options.redisOptions.username = username;
+    client.options.redisOptions.password = accessToken.token;
+
+    // Update all currently connected nodes
+    const nodes = client.nodes("all");
+    await Promise.all(
+      nodes.map(async (node) => {
+        node.options.username = username;
+        node.options.password = accessToken.token;
+        if (node.status === "ready") {
+          if (username) {
+            await node.call("AUTH", username, accessToken.token);
+          } else {
+            await node.call("AUTH", accessToken.token);
+          }
+        }
+      }),
+    );
+  } else {
+    client.options.username = username;
+    client.options.password = accessToken.token;
+
+    if (client.status === "ready") {
+      if (username) {
+        await client.call("AUTH", username, accessToken.token);
+      } else {
+        await client.call("AUTH", accessToken.token);
+      }
+    }
+  }
+};
+
+const refreshAzureManagedRedisAccessToken = async (
+  forceRefresh = false,
+): Promise<AzureRedisAccessToken> => {
+  if (!isAzureManagedRedisAuthEnabled || !azureManagedRedisCredential) {
+    throw new Error(
+      "Azure Managed Redis token refresh requested while REDIS_USE_DEFAULT_AZURE_CREDENTIAL is disabled",
+    );
+  }
+
+  if (
+    azureManagedRedisToken &&
+    !forceRefresh &&
+    azureManagedRedisToken.expiresOnTimestamp - Date.now() >
+      AZURE_MANAGED_REDIS_REFRESH_BUFFER_MS
+  ) {
+    return azureManagedRedisToken;
+  }
+
+  if (azureManagedRedisTokenPromise) {
+    return azureManagedRedisTokenPromise;
+  }
+
+  azureManagedRedisTokenPromise = (async () => {
+    const accessToken = await azureManagedRedisCredential.getToken(
+      AZURE_MANAGED_REDIS_SCOPE,
+    );
+
+    if (!accessToken?.token) {
+      throw new Error(
+        "DefaultAzureCredential did not return an Azure Managed Redis access token",
+      );
+    }
+
+    const resolvedToken: AzureRedisAccessToken = {
+      token: accessToken.token,
+      expiresOnTimestamp: accessToken.expiresOnTimestamp,
+    };
+
+    azureManagedRedisToken = resolvedToken;
+    scheduleAzureManagedRedisRefresh(resolvedToken);
+
+    await Promise.all(
+      Array.from(azureManagedRedisClients).map(async (client) => {
+        try {
+          await applyAzureManagedRedisTokenToClient(client, resolvedToken);
+        } catch (error) {
+          logger.error(
+            "Failed to apply refreshed Azure Managed Redis token to an active Redis client",
+            error,
+          );
+        }
+      }),
+    );
+
+    logger.debug("Azure Managed Redis access token refreshed");
+
+    return resolvedToken;
+  })().finally(() => {
+    azureManagedRedisTokenPromise = null;
+  });
+
+  return azureManagedRedisTokenPromise;
+};
+
+const registerAzureManagedRedisClient = (client: Redis | Cluster): void => {
+  if (!isAzureManagedRedisAuthEnabled) {
+    return;
+  }
+
+  azureManagedRedisClients.add(client);
+
+  client.on("ready", () => {
+    void refreshAzureManagedRedisAccessToken().catch((error) => {
+      logger.error(
+        "Failed to refresh Azure Managed Redis token after Redis client became ready",
+        error,
+      );
+    });
+  });
+
+  client.on("end", () => {
+    azureManagedRedisClients.delete(client);
+  });
+
+  void refreshAzureManagedRedisAccessToken().catch((error) => {
+    logger.error(
+      "Failed to start Azure Managed Redis token refresh loop",
+      error,
+    );
+  });
 };
 
 const createRedisClusterInstance = (
@@ -121,8 +363,8 @@ const createRedisClusterInstance = (
     },
     slotsRefreshTimeout: env.REDIS_CLUSTER_SLOTS_REFRESH_TIMEOUT,
     redisOptions: {
-      username: env.REDIS_USERNAME || undefined,
-      password: env.REDIS_AUTH || undefined,
+      username: getRedisUsername(),
+      password: getRedisPassword(),
       ...defaultRedisOptions,
       ...additionalOptions,
       ...tlsOptions,
@@ -163,8 +405,8 @@ const createRedisSentinelInstance = (
   const instance = new Redis({
     sentinels,
     name: env.REDIS_SENTINEL_MASTER_NAME,
-    username: env.REDIS_USERNAME || undefined,
-    password: env.REDIS_AUTH || undefined,
+    username: getRedisUsername(),
+    password: getRedisPassword(),
     sentinelUsername: env.REDIS_SENTINEL_USERNAME || undefined,
     sentinelPassword: env.REDIS_SENTINEL_PASSWORD || undefined,
     ...defaultRedisOptions,
@@ -182,6 +424,12 @@ const createRedisSentinelInstance = (
 export const createNewRedisInstance = (
   additionalOptions: Partial<RedisOptions> = {},
 ): Redis | Cluster | null => {
+  const azureManagedRedisConfigError = validateAzureManagedRedisConfig();
+  if (azureManagedRedisConfigError) {
+    logger.error(azureManagedRedisConfigError);
+    return null;
+  }
+
   if (
     env.REDIS_CLUSTER_ENABLED === "true" &&
     env.REDIS_SENTINEL_ENABLED === "true"
@@ -192,37 +440,43 @@ export const createNewRedisInstance = (
     return null;
   }
 
+  let instance: Redis | Cluster | null = null;
+
   if (env.REDIS_CLUSTER_ENABLED === "true") {
-    return createRedisClusterInstance(additionalOptions);
-  }
+    instance = createRedisClusterInstance(additionalOptions);
+  } else if (env.REDIS_SENTINEL_ENABLED === "true") {
+    instance = createRedisSentinelInstance(additionalOptions);
+  } else {
+    const tlsOptions = buildTlsOptions();
 
-  if (env.REDIS_SENTINEL_ENABLED === "true") {
-    return createRedisSentinelInstance(additionalOptions);
-  }
-
-  const tlsOptions = buildTlsOptions();
-
-  const instance = env.REDIS_CONNECTION_STRING
-    ? new Redis(env.REDIS_CONNECTION_STRING, {
-        ...defaultRedisOptions,
-        ...additionalOptions,
-        ...tlsOptions,
-      })
-    : env.REDIS_HOST
-      ? new Redis({
-          host: String(env.REDIS_HOST),
-          port: Number(env.REDIS_PORT),
-          username: env.REDIS_USERNAME || undefined,
-          password: String(env.REDIS_AUTH),
+    instance = env.REDIS_CONNECTION_STRING
+      ? new Redis(env.REDIS_CONNECTION_STRING, {
+          username: getRedisUsername(),
+          password: getRedisPassword(),
           ...defaultRedisOptions,
           ...additionalOptions,
           ...tlsOptions,
         })
-      : null;
+      : env.REDIS_HOST
+        ? new Redis({
+            host: String(env.REDIS_HOST),
+            port: Number(env.REDIS_PORT),
+            username: getRedisUsername(),
+            password: getRedisPassword(),
+            ...defaultRedisOptions,
+            ...additionalOptions,
+            ...tlsOptions,
+          })
+        : null;
 
-  instance?.on("error", (error) => {
-    logger.error("Redis error", error);
-  });
+    instance?.on("error", (error) => {
+      logger.error("Redis error", error);
+    });
+  }
+
+  if (instance && isAzureManagedRedisAuthEnabled) {
+    registerAzureManagedRedisClient(instance);
+  }
 
   return instance;
 };
@@ -235,7 +489,7 @@ export const createNewRedisInstance = (
 export const getQueuePrefix = (queueName: string): string | undefined => {
   const redisKeyPrefix = env.REDIS_KEY_PREFIX;
 
-  if (env.REDIS_CLUSTER_ENABLED === "true") {
+  if (env.REDIS_CLUSTER_ENABLED === "true" || isAzureManagedRedisAuthEnabled) {
     // Use hash tags for Redis cluster compatibility
     // This ensures all keys for a queue are placed on the same hash slot
     // Format: {prefix:queueName} ensures all keys land on same slot
@@ -257,7 +511,7 @@ export const safeMultiDel = async (
 ): Promise<void> => {
   if (!redis || keys.length === 0) return;
 
-  if (env.REDIS_CLUSTER_ENABLED === "true") {
+  if (env.REDIS_CLUSTER_ENABLED === "true" || isAzureManagedRedisAuthEnabled) {
     // In cluster mode, delete keys in separate commands to avoid CROSSSLOT errors
     await Promise.all(keys.map(async (key: string) => redis.del(key)));
   } else {

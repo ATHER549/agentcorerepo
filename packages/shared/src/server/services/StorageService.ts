@@ -9,11 +9,14 @@ import {
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { DefaultAzureCredential } from "@azure/identity";
 import {
   BlobSASPermissions,
   BlobServiceClient,
   ContainerClient,
+  generateBlobSASQueryParameters,
   StorageSharedKeyCredential,
+  type UserDelegationKey,
 } from "@azure/storage-blob";
 import { Storage, Bucket, GetSignedUrlConfig } from "@google-cloud/storage";
 import { logger } from "../logger";
@@ -22,6 +25,18 @@ import { backOff } from "exponential-backoff";
 import { ServiceUnavailableError } from "../../errors";
 import { BufferedStreamUploader } from "./BufferedStreamUploader";
 import { S3ChunkedUploadStrategy } from "./S3ChunkedUploadStrategy";
+
+const azureManagedIdentityClientId = process.env.AZURE_CLIENT_ID?.trim();
+
+const createAzureCredential = () =>
+  new DefaultAzureCredential(
+    azureManagedIdentityClientId
+      ? {
+          managedIdentityClientId: azureManagedIdentityClientId,
+          workloadIdentityClientId: azureManagedIdentityClientId,
+        }
+      : undefined,
+  );
 
 export interface S3SseConfig {
   serverSideEncryption?: string;
@@ -173,9 +188,13 @@ export class StorageServiceFactory {
 
 let azureContainersExists: Record<string, boolean> = {};
 class AzureBlobStorageService implements StorageService {
+  private blobServiceClient: BlobServiceClient;
   private client: ContainerClient;
   private container: string;
   private externalEndpoint: string | undefined;
+  private cachedUserDelegationKey:
+    | { key: UserDelegationKey; expiresOn: Date }
+    | undefined;
 
   constructor(params: {
     accessKeyId: string | undefined;
@@ -187,23 +206,88 @@ class AzureBlobStorageService implements StorageService {
     forcePathStyle: boolean;
   }) {
     const { accessKeyId, secretAccessKey, endpoint, externalEndpoint } = params;
-    if (!accessKeyId || !secretAccessKey || !endpoint) {
-      throw new Error(
-        `Endpoint, account and account key must be configured to use Azure Blob Storage`,
-      );
+    if (!endpoint) {
+      throw new Error(`Endpoint must be configured to use Azure Blob Storage`);
     }
 
     this.externalEndpoint = externalEndpoint;
-    const sharedKeyCredential = new StorageSharedKeyCredential(
-      accessKeyId,
-      secretAccessKey,
-    );
-    const blobServiceClient = new BlobServiceClient(
-      endpoint,
-      sharedKeyCredential,
-    );
+
+    // Support either account-key auth or DefaultAzureCredential during the
+    // Blob-first migration so existing setups keep working while AAD auth is adopted.
+    this.blobServiceClient =
+      accessKeyId && secretAccessKey
+        ? new BlobServiceClient(
+            endpoint,
+            new StorageSharedKeyCredential(accessKeyId, secretAccessKey),
+          )
+        : new BlobServiceClient(endpoint, createAzureCredential());
+
     this.container = params.bucketName;
-    this.client = blobServiceClient.getContainerClient(this.container);
+    this.client = this.blobServiceClient.getContainerClient(this.container);
+  }
+
+  private async getUserDelegationKey(
+    ttlSeconds: number,
+  ): Promise<UserDelegationKey> {
+    const now = new Date();
+    const cacheBufferMs = 5 * 60 * 1000;
+    if (
+      this.cachedUserDelegationKey &&
+      this.cachedUserDelegationKey.expiresOn.getTime() - now.getTime() >
+        cacheBufferMs
+    ) {
+      return this.cachedUserDelegationKey.key;
+    }
+
+    const startsOn = new Date(now.getTime() - 5 * 60 * 1000);
+    const expiresOn = new Date(
+      now.getTime() + Math.max(ttlSeconds, 3600) * 1000,
+    );
+    const key = await this.blobServiceClient.getUserDelegationKey(
+      startsOn,
+      expiresOn,
+    );
+    this.cachedUserDelegationKey = { key, expiresOn };
+    return key;
+  }
+
+  private async generateUserDelegationSasUrl(params: {
+    blobName: string;
+    permissions: string;
+    ttlSeconds: number;
+    contentDisposition?: string;
+    contentType?: string;
+  }): Promise<string> {
+    const now = new Date();
+    const startsOn = new Date(now.getTime() - 5 * 60 * 1000);
+    const expiresOn = new Date(now.getTime() + params.ttlSeconds * 1000);
+    const userDelegationKey = await this.getUserDelegationKey(
+      params.ttlSeconds,
+    );
+
+    const blobClient = this.client.getBlockBlobClient(params.blobName);
+    const sas = generateBlobSASQueryParameters(
+      {
+        containerName: this.container,
+        blobName: params.blobName,
+        permissions: BlobSASPermissions.parse(params.permissions),
+        startsOn,
+        expiresOn,
+        contentDisposition: params.contentDisposition,
+        contentType: params.contentType,
+      },
+      userDelegationKey,
+      this.blobServiceClient.accountName,
+    ).toString();
+
+    let url = `${blobClient.url}?${sas}`;
+
+    // Replace internal endpoint with external endpoint if configured
+    if (this.externalEndpoint && url.includes(this.client.url)) {
+      url = url.replace(this.client.url, this.externalEndpoint);
+    }
+
+    return url;
   }
 
   private async createContainerIfNotExists(): Promise<void> {
@@ -400,22 +484,14 @@ class AzureBlobStorageService implements StorageService {
   ): Promise<string> {
     try {
       await this.createContainerIfNotExists();
-
-      const blockBlobClient = this.client.getBlockBlobClient(fileName);
-      let url = await blockBlobClient.generateSasUrl({
-        permissions: BlobSASPermissions.parse("r"),
-        expiresOn: new Date(Date.now() + ttlSeconds * 1000),
+      return await this.generateUserDelegationSasUrl({
+        blobName: fileName,
+        permissions: "r",
+        ttlSeconds,
         contentDisposition: asAttachment
           ? `attachment; filename="${fileName}"`
           : undefined,
       });
-
-      // Replace internal endpoint with external endpoint if configured
-      if (this.externalEndpoint && url.includes(this.client.url)) {
-        url = url.replace(this.client.url, this.externalEndpoint);
-      }
-
-      return url;
     } catch (err) {
       logger.error(
         `Failed to generate presigned URL for Azure Blob Storage ${fileName}`,
@@ -435,20 +511,12 @@ class AzureBlobStorageService implements StorageService {
     const { path, ttlSeconds, contentType } = params;
     try {
       await this.createContainerIfNotExists();
-
-      const blockBlobClient = this.client.getBlockBlobClient(path);
-      let url = await blockBlobClient.generateSasUrl({
-        permissions: BlobSASPermissions.parse("w"),
-        expiresOn: new Date(Date.now() + ttlSeconds * 1000),
+      return await this.generateUserDelegationSasUrl({
+        blobName: path,
+        permissions: "w",
+        ttlSeconds,
         contentType: contentType,
       });
-
-      // Replace internal endpoint with external endpoint if configured
-      if (this.externalEndpoint && url.includes(this.client.url)) {
-        url = url.replace(this.client.url, this.externalEndpoint);
-      }
-
-      return url;
     } catch (err) {
       logger.error(
         `Failed to generate presigned upload URL for Azure Blob Storage ${path}`,
