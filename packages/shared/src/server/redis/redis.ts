@@ -224,23 +224,29 @@ const applyAzureManagedRedisTokenToClient = async (
     client.options.redisOptions.username = username;
     client.options.redisOptions.password = accessToken.token;
 
-    // Update each currently known node's options in place.
-    for (const node of client.nodes("all")) {
+    // Re-authenticate each currently known node in-place via AUTH.
+    // This avoids disconnect(true) which drops all connections and
+    // causes BullMQ queues (with enableOfflineQueue: false) to error.
+    const authPromises = client.nodes("all").map(async (node) => {
       node.options.username = username;
       node.options.password = accessToken.token;
-    }
-
-    // Force a full cluster reconnect. ioredis has no native streaming
-    // credential provider, so the most reliable way to re-authenticate
-    // every existing connection (including the ephemeral ones created
-    // during slot refresh) is to drop them and let ioredis reconnect
-    // with the updated redisOptions. Commands are queued during
-    // reconnect, so no data is lost.
-    client.disconnect(true);
+      try {
+        await node.call("AUTH", username!, accessToken.token);
+      } catch (error) {
+        logger.warn("Failed to AUTH on cluster node, will reconnect", error);
+        node.disconnect(true);
+      }
+    });
+    await Promise.all(authPromises);
   } else {
     client.options.username = username;
     client.options.password = accessToken.token;
-    client.disconnect(true);
+    try {
+      await client.call("AUTH", username!, accessToken.token);
+    } catch (error) {
+      logger.warn("Failed to AUTH on Redis client, will reconnect", error);
+      client.disconnect(true);
+    }
   }
 };
 
