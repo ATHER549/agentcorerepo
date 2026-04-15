@@ -1,0 +1,1135 @@
+
+
+================================================================================
+
+       LLM-BASED FILE CLASSIFICATION SYSTEM — PLAN, STRATEGY & APPROACH
+
+================================================================================
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. PROBLEM STATEMENT
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+We need to build an automated classification pipeline that:
+
+  • Accepts files of various formats (Excel, PDF, Word, TXT, Images, etc.)
+
+  • Extracts meaningful content from each file type
+
+  • Sends the extracted content to an LLM for analysis
+
+  • Returns a classification label: "Quotation", "MBPC", or "Other"
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+2. HIGH-LEVEL ARCHITECTURE
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  ┌─────────────┐    ┌──────────────────┐    ┌─────────────────┐    ┌──────────────┐
+
+  │  File Input  │───▶│  Content Extractor│───▶│  LLM Classifier │───▶│  Classification│
+
+  │  (Any Format)│    │  (Per File Type)  │    │  (Prompt Engine) │    │  Result / Label │
+
+  └─────────────┘    └──────────────────┘    └─────────────────┘    └──────────────┘
+
+         │                    │                        │                      │
+
+         │                    ▼                        ▼                      ▼
+
+         │           ┌──────────────┐         ┌──────────────┐      ┌──────────────┐
+
+         │           │ Text / Table  │         │  Structured   │      │  Quotation   │
+
+         │           │ / Image Data  │         │  JSON Output  │      │  MBPC        │
+
+         │           └──────────────┘         └──────────────┘      │  Other       │
+
+         │                                                           └──────────────┘
+
+         ▼
+
+  Supported Formats:
+
+  .xlsx, .xls, .csv, .pdf, .docx, .doc, .txt, .png, .jpg, .jpeg, .tiff, .bmp
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3. DETAILED COMPONENT BREAKDOWN
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+
+│  COMPONENT 1: FILE INGESTION & ROUTING LAYER                                │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  Purpose: Accept the incoming file, detect its type, and route it to the     │
+
+│           correct content extractor.                                         │
+
+│                                                                              │
+
+│  How it works:                                                               │
+
+│    1. File is uploaded via API endpoint (e.g., FastAPI /classify endpoint)   │
+
+│    2. MIME type / file extension is detected                                 │
+
+│    3. File is routed to the appropriate extractor based on type              │
+
+│                                                                              │
+
+│  Technology:                                                                 │
+
+│    • python-magic or mimetypes library for detection                         │
+
+│    • FastAPI / Flask for the API layer                                       │
+
+│                                                                              │
+
+│  File Type → Extractor Mapping:                                              │
+
+│    ┌────────────────────┬────────────────────────────────────┐               │
+
+│    │  File Type         │  Extractor Module                  │               │
+
+│    ├────────────────────┼────────────────────────────────────┤               │
+
+│    │  .xlsx / .xls / csv│  Excel/CSV Extractor (openpyxl,    │               │
+
+│    │                    │  pandas)                            │               │
+
+│    │  .pdf              │  PDF Extractor (pdfplumber /        │               │
+
+│    │                    │  PyMuPDF + OCR fallback)            │               │
+
+│    │  .docx / .doc      │  Word Extractor (python-docx /     │               │
+
+│    │                    │  textract)                          │               │
+
+│    │  .txt              │  Plain Text Reader                  │               │
+
+│    │  .png/.jpg/.tiff   │  Image Extractor (OCR via           │               │
+
+│    │                    │  Tesseract / Vision LLM)            │               │
+
+│    └────────────────────┴────────────────────────────────────┘               │
+
+│                                                                              │
+
+└──────────────────────────────────────────────────────────────────────────────┘
+
+ 
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+
+│  COMPONENT 2: CONTENT EXTRACTION LAYER                                       │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  Purpose: Convert raw file bytes into structured text/data that an LLM       │
+
+│           can understand and reason over.                                     │
+
+│                                                                              │
+
+│  Extractor Details:                                                          │
+
+│                                                                              │
+
+│  A) EXCEL / CSV Extractor                                                    │
+
+│     ─────────────────────                                                    │
+
+│     • Library: pandas, openpyxl                                              │
+
+│     • Strategy:                                                              │
+
+│       - Read all sheets (for Excel) or the single CSV                        │
+
+│       - Convert each sheet to a text representation:                         │
+
+│         → First N rows as markdown table (to preserve structure)             │
+
+│         → Column headers listed explicitly                                   │
+
+│         → Sheet names included as metadata                                   │
+
+│       - If file is very large, sample first 50-100 rows (sufficient          │
+
+│         for classification — we don't need ALL data)                         │
+
+│     • Output: Structured text block with headers + sample rows               │
+
+│                                                                              │
+
+│  B) PDF Extractor                                                            │
+
+│     ─────────────────                                                        │
+
+│     • Library: pdfplumber (text+tables), PyMuPDF/fitz (text),                │
+
+│                pytesseract (OCR for scanned PDFs)                            │
+
+│     • Strategy:                                                              │
+
+│       - Attempt text extraction first (pdfplumber)                           │
+
+│       - If text is empty/minimal → assume scanned PDF → run OCR              │
+
+│       - Extract tables separately and format as markdown                     │
+
+│       - Extract first 3-5 pages only (enough for classification)             │
+
+│     • Output: Combined text + table content                                  │
+
+│                                                                              │
+
+│  C) Word Document Extractor                                                  │
+
+│     ─────────────────────────                                                │
+
+│     • Library: python-docx (.docx), textract (.doc legacy)                   │
+
+│     • Strategy:                                                              │
+
+│       - Extract all paragraphs and tables                                    │
+
+│       - Preserve heading structure (useful classification signal)            │
+
+│       - Extract first N paragraphs / first 3000 words                        │
+
+│     • Output: Structured text with headings and table content                │
+
+│                                                                              │
+
+│  D) Plain Text Extractor                                                     │
+
+│     ────────────────────────                                                 │
+
+│     • Strategy: Read file with encoding detection (chardet)                  │
+
+│     • Output: Raw text (truncated to first 3000-5000 words)                  │
+
+│                                                                              │
+
+│  E) Image Extractor                                                          │
+
+│     ─────────────────                                                        │
+
+│     • Two approaches (choose based on LLM capability):                       │
+
+│                                                                              │
+
+│       APPROACH 1 — OCR then Text LLM:                                        │
+
+│         - Use pytesseract / EasyOCR to extract text from image               │
+
+│         - Send extracted text to the text-based LLM                          │
+
+│                                                                              │
+
+│       APPROACH 2 — Vision LLM (Preferred if available):                      │
+
+│         - Send the image directly to a multimodal LLM                        │
+
+│           (e.g., GPT-4o, GPT-4 Vision, Gemini Pro Vision)                   │
+
+│         - The LLM "sees" the image and classifies directly                   │
+
+│         - More accurate for complex layouts, logos, stamps                   │
+
+│                                                                              │
+
+│     • Output: Extracted text OR base64-encoded image for vision LLM          │
+
+│                                                                              │
+
+│  IMPORTANT — Content Truncation & Token Management:                          │
+
+│  ─────────────────────────────────────────────────────                        │
+
+│     • LLMs have token limits. We MUST truncate/summarize extracted           │
+
+│       content to fit within context window.                                  │
+
+│     • Target: Keep extracted content under ~3000-4000 tokens                 │
+
+│     • For classification, we typically need only:                            │
+
+│       - File metadata (name, type, sheet names)                              │
+
+│       - Headers / column names                                               │
+
+│       - First few rows of data or first few paragraphs                       │
+
+│       - Any title / subject / header section                                 │
+
+│                                                                              │
+
+└──────────────────────────────────────────────────────────────────────────────┘
+ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+
+│  COMPONENT 3: LLM CLASSIFICATION ENGINE                                      │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  Purpose: Analyze extracted content and return a classification label.        │
+
+│                                                                              │
+
+│  A) LLM Selection                                                            │
+
+│     ─────────────────                                                        │
+
+│     • Primary: GPT-4o (multimodal — handles text + images)                   │
+
+│     • Alternative: GPT-4o-mini (cost-effective for high volume)              │
+
+│     • Fallback: GPT-3.5-turbo (if cost is a major constraint)               │
+
+│     • On-prem option: Llama 3 / Mistral (if data privacy is critical)       │
+
+│                                                                              │
+
+│  B) Prompt Engineering Strategy                                              │
+
+│     ──────────────────────────────                                           │
+
+│     The prompt is the MOST CRITICAL part. It must:                           │
+
+│       1. Clearly define each category with rules & examples                  │
+
+│       2. Provide the extracted content as context                            │
+
+│       3. Force structured output (JSON)                                      │
+
+│                                                                              │
+
+│     SYSTEM PROMPT (Template):                                                │
+
+│     ┌────────────────────────────────────────────────────────────────┐       │
+
+│     │  You are a document classification expert. Your job is to      │       │
+
+│     │  analyze the content of a file and classify it into exactly    │       │
+
+│     │  one of three categories:                                      │       │
+
+│     │                                                                │       │
+
+│     │  1. **Quotation** — A document that contains a price quote,    │       │
+
+│     │     proposal, bid, or estimate for goods/services. Typical     │       │
+
+│     │     signals include:                                           │       │
+
+│     │     - Words like "quotation", "quote", "estimate", "proposal"  │       │
+
+│     │     - Line items with descriptions, quantities, unit prices    │       │
+
+│     │     - Vendor/supplier information, validity dates              │       │
+
+│     │     - Terms & conditions for pricing                           │       │
+
+│     │     - Total amounts, taxes, discounts                          │       │
+
+│     │                                                                │       │
+
+│     │  2. **MBPC** — A document related to MBPC                      │       │
+
+│     │     (Monthly/Material/Merit Based Payment Certificate OR       │       │
+
+│     │      relevant MBPC definition for your domain).                │       │
+
+│     │     Typical signals include:                                   │       │
+
+│     │     - [Define specific MBPC signals based on your domain]      │       │
+
+│     │     - Payment certificates, milestone billing                  │       │
+
+│     │     - Work completion reports, measurement sheets              │       │
+
+│     │     - Progressive billing, running account bills               │       │
+
+│     │     - References to contract clauses, BOQ items                │       │
+
+│     │                                                                │       │
+
+│     │  3. **Other** — Any document that does NOT fit into Quotation  │       │
+
+│     │     or MBPC categories.                                        │       │
+
+│     │                                                                │       │
+
+│     │  RULES:                                                        │       │
+
+│     │  - Return ONLY a JSON object with the classification.          │       │
+
+│     │  - You must pick exactly one category.                         │       │
+
+│     │  - Include a confidence score (0.0 to 1.0).                    │       │
+
+│     │  - Include a brief reason for your classification.             │       │
+
+│     │                                                                │       │
+
+│     │  OUTPUT FORMAT:                                                │       │
+
+│     │  {                                                             │       │
+
+│     │    "classification": "Quotation" | "MBPC" | "Other",          │       │
+
+│     │    "confidence": 0.95,                                         │       │
+
+│     │    "reason": "Brief explanation..."                            │       │
+
+│     │  }                                                             │       │
+
+│     └────────────────────────────────────────────────────────────────┘       │
+
+│                                                                              │
+
+│     USER PROMPT (Template):                                                  │
+
+│     ┌────────────────────────────────────────────────────────────────┐       │
+
+│     │  Classify the following file.                                  │       │
+
+│     │                                                                │       │
+
+│     │  FILE METADATA:                                                │       │
+
+│     │  - Filename: {filename}                                        │       │
+
+│     │  - File Type: {file_type}                                      │       │
+
+│     │  - Sheet Names (if Excel): {sheet_names}                       │       │
+
+│     │                                                                │       │
+
+│     │  EXTRACTED CONTENT:                                            │       │
+
+│     │  ---                                                           │       │
+
+│     │  {extracted_content}                                           │       │
+
+│     │  ---                                                           │       │
+
+│     │                                                                │       │
+
+│     │  Based on the above, classify this file.                       │       │
+
+│     └────────────────────────────────────────────────────────────────┘       │
+
+│                                                                              │
+
+│  C) Output Parsing                                                           │
+
+│     ──────────────────                                                       │
+
+│     • Use JSON mode / structured output from the LLM API                     │
+
+│     • Parse the JSON response and validate:                                  │
+
+│       - classification ∈ {"Quotation", "MBPC", "Other"}                      │
+
+│       - confidence ∈ [0.0, 1.0]                                              │
+
+│     • If parsing fails → retry once → if still fails → return "Other"        │
+
+│       with low confidence + flag for human review                            │
+
+│                                                                              │
+
+└──────────────────────────────────────────────────────────────────────────────┘
+
+ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+
+│  COMPONENT 4: API / INTEGRATION LAYER                                        │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  Purpose: Expose the classification as a usable service.                     │
+
+│                                                                              │
+
+│  API Design (FastAPI):                                                       │
+
+│                                                                              │
+
+│    POST /api/v1/classify                                                     │
+
+│    ─────────────────────                                                     │
+
+│    Request:  multipart/form-data with file upload                            │
+
+│    Response: {                                                               │
+
+│                "filename": "quote_abc.pdf",                                  │
+
+│                "file_type": "pdf",                                           │
+
+│                "classification": "Quotation",                                │
+
+│                "confidence": 0.97,                                           │
+
+│                "reason": "Contains line items with unit prices...",           │
+
+│                "processing_time_ms": 2340                                    │
+
+│              }                                                               │
+
+│                                                                              │
+
+│    POST /api/v1/classify-batch                                               │
+
+│    ─────────────────────────                                                 │
+
+│    Request:  multipart/form-data with multiple files                         │
+
+│    Response: Array of classification results                                 │
+
+│                                                                              │
+
+└──────────────────────────────────────────────────────────────────────────────┘
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4. IMPLEMENTATION STRATEGY — PHASED APPROACH
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+
+│                                                                              │
+
+│  PHASE 1: FOUNDATION (Week 1-2)                                              │
+
+│  ═══════════════════════════════                                             │
+
+│                                                                              │
+
+│  ✅ Task 1.1: Gather sample files                                            │
+
+│     • Collect 20-30 sample files for EACH category (Quotation, MBPC, Other)  │
+
+│     • Ensure variety in formats (PDF, Excel, Word, Images, etc.)             │
+
+│     • Label them manually — this becomes your test/validation set            │
+
+│                                                                              │
+
+│  ✅ Task 1.2: Build Content Extractors                                       │
+
+│     • Implement individual extractors for each file type                     │
+
+│     • Write unit tests for each extractor                                    │
+
+│     • Handle edge cases: password-protected files, corrupted files,          │
+
+│       empty files, very large files                                          │
+
+│                                                                              │
+
+│  ✅ Task 1.3: Design & Test Prompts                                          │
+
+│     • Draft the system prompt with category definitions                      │
+
+│     • Test with 5-10 sample files manually via LLM playground               │
+
+│     • Iterate on prompt wording until accuracy is satisfactory               │
+
+│                                                                              │
+
+│  Deliverable: Working extractors + validated prompt template                 │
+
+│                                                                              │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  PHASE 2: CORE PIPELINE (Week 2-3)                                           │
+
+│  ═════════════════════════════════                                            │
+
+│                                                                              │
+
+│  ✅ Task 2.1: Build the Classification Pipeline                              │
+
+│     • Wire up: File Input → Extractor → LLM Call → Parse Output             │
+
+│     • Implement retry logic, error handling, timeout management              │
+
+│     • Add logging at each stage for debugging                                │
+
+│                                                                              │
+
+│  ✅ Task 2.2: Build the API Layer                                            │
+
+│     • FastAPI endpoints for single + batch classification                    │
+
+│     • File size limits, rate limiting, input validation                      │
+
+│     • Health check endpoint                                                  │
+
+│                                                                              │
+
+│  ✅ Task 2.3: Validation Against Sample Set                                  │
+
+│     • Run all labeled sample files through the pipeline                      │
+
+│     • Measure accuracy, precision, recall per category                       │
+
+│     • Target: ≥ 90% accuracy on sample set                                  │
+
+│                                                                              │
+
+│  Deliverable: Working end-to-end API with measured accuracy                  │
+
+│                                                                              │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  PHASE 3: HARDENING & OPTIMIZATION (Week 3-4)                                │
+
+│  ═════════════════════════════════════════════                                │
+
+│                                                                              │
+
+│  ✅ Task 3.1: Edge Case Handling                                             │
+
+│     • Scanned PDFs (OCR fallback)                                            │
+
+│     • Multi-language documents                                               │
+
+│     • Mixed-content files (e.g., a PDF with both quotation + other content)  │
+
+│     • Very large files (streaming extraction, chunking)                      │
+
+│     • Password-protected / encrypted files                                   │
+
+│                                                                              │
+
+│  ✅ Task 3.2: Confidence Threshold & Human Review Loop                       │
+
+│     • If confidence < 0.7 → flag for human review                            │
+
+│     • Build a simple review queue (optional, based on requirements)          │
+
+│     • Human corrections feed back into prompt improvement                    │
+
+│                                                                              │
+
+│  ✅ Task 3.3: Cost Optimization                                              │
+
+│     • Use GPT-4o-mini for first-pass; escalate to GPT-4o only if            │
+
+│       confidence is low (tiered approach)                                    │
+
+│     • Cache results for identical files (hash-based deduplication)           │
+
+│     • Minimize token usage by smart content truncation                       │
+
+│                                                                              │
+
+│  ✅ Task 3.4: Monitoring & Observability                                     │
+
+│     • Log every classification with input hash, result, confidence,          │
+
+│       processing time, token usage                                           │
+
+│     • Dashboard for classification distribution, accuracy trends             │
+
+│     • Alerting on high error rates or low confidence streaks                 │
+
+│                                                                              │
+
+│  Deliverable: Production-hardened, optimized pipeline                        │
+
+│                                                                              │
+
+├──────────────────────────────────────────────────────────────────────────────┤
+
+│                                                                              │
+
+│  PHASE 4: DEPLOYMENT & CONTINUOUS IMPROVEMENT (Week 4+)                      │
+
+│  ══════════════════════════════════════════════════════                       │
+
+│                                                                              │
+
+│  ✅ Task 4.1: Deploy to Production                                           │
+
+│     • Containerize with Docker                                               │
+
+│     • Deploy to cloud (Azure App Service / AWS ECS / K8s)                   │
+
+│     • Set up CI/CD pipeline                                                  │
+
+│                                                                              │
+
+│  ✅ Task 4.2: Continuous Prompt Improvement                                  │
+
+│     • Collect misclassified files from production                            │
+
+│     • Add them to the test set                                               │
+
+│     • Refine prompts and re-validate                                         │
+
+│                                                                              │
+
+│  ✅ Task 4.3: Future Enhancements                                            │
+
+│     • Add new categories as needed (beyond Quotation/MBPC/Other)            │
+
+│     • Fine-tune a smaller model if volume justifies it                       │
+
+│     • Implement few-shot examples in the prompt for tricky cases            │
+
+│                                                                              │
+
+└──────────────────────────────────────────────────────────────────────────────┘
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+5. TECHNOLOGY STACK
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  ┌─────────────────────┬──────────────────────────────────────────────────┐
+
+  │  Layer              │  Technology                                      │
+
+  ├─────────────────────┼──────────────────────────────────────────────────┤
+
+  │  Language           │  Python 3.10+                                    │
+
+  │  API Framework      │  FastAPI                                         │
+
+  │  LLM Provider       │  OpenAI (GPT-4o / GPT-4o-mini) OR Azure OpenAI  │
+
+  │  PDF Extraction     │  pdfplumber + PyMuPDF + pytesseract (OCR)        │
+
+  │  Excel Extraction   │  pandas + openpyxl                               │
+
+  │  Word Extraction    │  python-docx                                     │
+
+  │  Image OCR          │  pytesseract / EasyOCR / Vision LLM             │
+
+  │  File Type Detect   │  python-magic / mimetypes                        │
+
+  │  Containerization   │  Docker                                          │
+
+  │  Logging            │  structlog / Python logging                      │
+
+  │  Testing            │  pytest                                          │
+
+  │  CI/CD              │  GitHub Actions / Azure DevOps                   │
+
+  └─────────────────────┴──────────────────────────────────────────────────┘
+
+ 
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+6. CODE STRUCTURE (Proposed Project Layout)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  file-classifier/
+
+  │
+
+  ├── app/
+
+  │   ├── main.py                    # FastAPI app entry point
+
+  │   ├── config.py                  # Configuration & environment vars
+
+  │   │
+
+  │   ├── api/
+
+  │   │   ├── routes.py              # API route definitions
+
+  │   │   └── schemas.py             # Pydantic request/response models
+
+  │   │
+
+  │   ├── extractors/
+
+  │   │   ├── base.py                # Abstract base extractor
+
+  │   │   ├── excel_extractor.py     # Excel/CSV extraction
+
+  │   │   ├── pdf_extractor.py       # PDF extraction (text + OCR)
+
+  │   │   ├── word_extractor.py      # Word document extraction
+
+  │   │   ├── text_extractor.py      # Plain text extraction
+
+  │   │   ├── image_extractor.py     # Image OCR extraction
+
+  │   │   └── extractor_factory.py   # Factory to select right extractor
+
+  │   │
+
+  │   ├── classifier/
+
+  │   │   ├── llm_client.py          # LLM API wrapper (OpenAI/Azure)
+
+  │   │   ├── prompt_templates.py    # System & user prompt templates
+
+  │   │   └── classifier.py          # Main classification orchestrator
+
+  │   │
+
+  │   └── utils/
+
+  │       ├── file_utils.py          # File type detection, validation
+
+  │       ├── token_utils.py         # Token counting, content truncation
+
+  │       └── logging_config.py      # Logging setup
+
+  │
+
+  ├── tests/
+
+  │   ├── test_extractors/           # Unit tests for each extractor
+
+  │   ├── test_classifier/           # Tests for classification logic
+
+  │   ├── test_api/                  # API integration tests
+
+  │   └── sample_files/              # Labeled test files
+
+  │
+
+  ├── Dockerfile
+
+  ├── docker-compose.yml
+
+  ├── requirements.txt
+
+  ├── .env.example
+
+  └── README.md
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+7. KEY DESIGN DECISIONS & CONSIDERATIONS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  ┌──────────────────────────────────────────────────────────────────────────┐
+
+  │  DECISION 1: Text Extraction + Text LLM  vs.  Direct Vision LLM        │
+
+  │  ──────────────────────────────────────────────────────────────────      │
+
+  │                                                                          │
+
+  │  Option A: Extract text first, then send text to LLM                    │
+
+  │    ✅ Works with any LLM (including text-only models)                    │
+
+  │    ✅ Cheaper (text tokens < image tokens)                               │
+
+  │    ✅ More controllable — you see what the LLM sees                      │
+
+  │    ❌ Lossy — extraction may miss formatting, layout, logos              │
+
+  │    ❌ OCR errors can propagate                                           │
+
+  │                                                                          │
+
+  │  Option B: Send file as image directly to Vision LLM                    │
+
+  │    ✅ Preserves full visual layout                                       │
+
+  │    ✅ Better for scanned documents and images                            │
+
+  │    ❌ More expensive (image tokens cost more)                            │
+
+  │    ❌ Requires multimodal LLM                                            │
+
+  │    ❌ Can't send Excel/Word directly — would need to render as image     │
+
+  │                                                                          │
+
+  │  ★ RECOMMENDATION: Hybrid Approach                                      │
+
+  │    - For text-rich files (Excel, Word, TXT): Extract text → Text LLM    │
+
+  │    - For visual files (Images, Scanned PDFs): Use Vision LLM directly   │
+
+  │    - For regular PDFs: Extract text first; if extraction quality is      │
+
+  │      poor, fall back to rendering pages as images → Vision LLM          │
+
+  │                                                                          │
+
+  ├──────────────────────────────────────────────────────────────────────────┤
+
+  │  DECISION 2: Prompt Approach — Zero-shot vs. Few-shot                   │
+
+  │  ────────────────────────────────────────────────────                    │
+
+  │                                                                          │
+
+  │  • Start with Zero-shot (just instructions, no examples)                │
+
+  │  • If accuracy is below target → add 1-2 Few-shot examples per          │
+
+  │    category (increases token usage but improves accuracy)                │
+
+  │  • Few-shot examples should be representative but SHORT snippets        │
+
+  │                                                                          │
+
+  ├──────────────────────────────────────────────────────────────────────────┤
+
+  │  DECISION 3: Cost vs. Accuracy Trade-off                                │
+
+  │  ───────────────────────────────────────                                 │
+
+  │                                                                          │
+
+  │  Tiered Classification Strategy:                                        │
+
+  │    Tier 1: GPT-4o-mini (fast, cheap) — handles ~80-85% of files         │
+
+  │    Tier 2: GPT-4o (accurate, costly) — only for low-confidence cases    │
+
+  │    Tier 3: Human Review — for very ambiguous files                      │
+
+  │                                                                          │
+
+  │  Estimated Costs (approximate):                                         │
+
+  │    • GPT-4o-mini: ~$0.001 - $0.003 per file                            │
+
+  │    • GPT-4o:      ~$0.01  - $0.03  per file                            │
+
+  │    • With tiered approach: ~$0.003 - $0.005 average per file            │
+
+  │                                                                          │
+
+  ├──────────────────────────────────────────────────────────────────────────┤
+
+  │  DECISION 4: Data Privacy & Security                                    │
+
+  │  ──────────────────────────────────                                      │
+
+  │                                                                          │
+
+  │  • If files contain sensitive data:                                      │
+
+  │    → Use Azure OpenAI (data stays in your Azure tenant)                 │
+
+  │    → Or deploy an on-premise LLM (Llama 3 / Mistral)                   │
+
+  │  • Never log full file content — only log classification results        │
+
+  │  • Implement file retention policy (delete after processing)            │
+
+  │                                                                          │
+
+  └──────────────────────────────────────────────────────────────────────────┘
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+8. SAMPLE PSEUDO-CODE FLOW
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  def classify_file(uploaded_file):
+ 
+      # Step 1: Detect file type
+
+      file_type = detect_file_type(uploaded_file)
+ 
+      # Step 2: Extract content based on file type
+
+      extractor = ExtractorFactory.get_extractor(file_type)
+
+      extracted_content = extractor.extract(uploaded_file)
+ 
+      # Step 3: Truncate content to fit token limits
+
+      truncated_content = truncate_to_token_limit(
+
+          extracted_content, max_tokens=3500
+
+      )
+ 
+      # Step 4: Build the prompt
+
+      messages = [
+
+          {"role": "system", "content": SYSTEM_PROMPT},
+
+          {"role": "user",   "content": USER_PROMPT.format(
+
+              filename=uploaded_file.filename,
+
+              file_type=file_type,
+
+              extracted_content=truncated_content
+
+          )}
+
+      ]
+ 
+      # Step 5: Call LLM
+
+      response = llm_client.chat_completion(
+
+          model="gpt-4o-mini",
+
+          messages=messages,
+
+          response_format={"type": "json_object"},
+
+          temperature=0.0  # deterministic for classification
+
+      )
+ 
+      # Step 6: Parse and validate response
+
+      result = parse_classification_response(response)
+ 
+      # Step 7: If low confidence, escalate to GPT-4o
+
+      if result.confidence < 0.7:
+
+          result = retry_with_stronger_model(messages, model="gpt-4o")
+ 
+      return result
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+9. SUCCESS METRICS & EVALUATION
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  ┌────────────────────────┬────────────────────────────────────────────────┐
+
+  │  Metric                │  Target                                        │
+
+  ├────────────────────────┼────────────────────────────────────────────────┤
+
+  │  Overall Accuracy      │  ≥ 92%                                         │
+
+  │  Per-class Precision   │  ≥ 90% for Quotation, ≥ 90% for MBPC          │
+
+  │  Per-class Recall      │  ≥ 90% for Quotation, ≥ 90% for MBPC          │
+
+  │  Avg Processing Time   │  < 5 seconds per file                          │
+
+  │  Avg Cost per File     │  < $0.01                                       │
+
+  │  Error Rate (crashes)  │  < 1%                                          │
+
+  │  Human Review Rate     │  < 10% of files (low-confidence fallback)      │
+
+  └────────────────────────┴────────────────────────────────────────────────┘
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+10. RISKS & MITIGATIONS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  ┌──────────────────────────────┬─────────────────────────────────────────┐
+
+  │  Risk                        │  Mitigation                             │
+
+  ├──────────────────────────────┼─────────────────────────────────────────┤
+
+  │  LLM API downtime            │  Implement retry + fallback to          │
+
+  │                              │  secondary provider                     │
+
+  │  Scanned PDF with poor OCR   │  Use Vision LLM as fallback            │
+
+  │  Ambiguous files             │  Confidence threshold + human review    │
+
+  │  Prompt injection in files   │  Sanitize extracted content;            │
+
+  │                              │  use system prompt boundaries           │
+
+  │  Token limit exceeded        │  Smart truncation; prioritize headers   │
+
+  │  Cost overrun at scale       │  Tiered model strategy; caching        │
+
+  │  New file categories emerge  │  Modular prompt design — easy to add    │
+
+  │  Data privacy concerns       │  Use Azure OpenAI or on-prem LLM       │
+
+  └──────────────────────────────┴─────────────────────────────────────────┘
+ 
+ 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+11. NEXT STEPS (IMMEDIATE ACTION ITEMS)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 
+  □ 1. Clarify MBPC definition — Get exact definition and examples of
+
+       what constitutes an MBPC document in your domain.
+ 
+  □ 2. Collect sample files — Gather 20-30 labeled samples per category.
+ 
+  □ 3. Set up development environment — Python project with dependencies.
+ 
+  □ 4. Build & test extractors — Start with the most common file types
+
+       in your pipeline (likely PDF and Excel).
+ 
+  □ 5. Design & iterate on prompts — Test in LLM playground before coding.
+ 
+  □ 6. Build the pipeline — Wire everything together.
+ 
+  □ 7. Validate accuracy — Run against labeled test set, iterate.
+ 
+  □ 8. Deploy — Containerize and ship.
+ 
+================================================================================
+
+                              END OF DOCUMENT
+
+================================================================================
+
+ 
