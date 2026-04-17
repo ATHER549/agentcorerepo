@@ -1,4 +1,6 @@
 import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import structlog
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from app.api.schemas import ClassificationResponse, BatchClassificationResponse, ErrorResponse
@@ -11,6 +13,9 @@ logger = structlog.get_logger()
 
 router = APIRouter()
 
+# Thread pool for parallel LLM calls in batch mode
+_executor = ThreadPoolExecutor(max_workers=settings.batch_concurrency)
+
 
 @router.post(
     "/classify",
@@ -18,7 +23,6 @@ router = APIRouter()
     responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
 )
 async def classify_single_file(file: UploadFile = File(...)):
-    # Validate file extension
     ext = Path(file.filename or "").suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
@@ -26,10 +30,8 @@ async def classify_single_file(file: UploadFile = File(...)):
             detail=f"Unsupported file type: {ext}. Supported: {sorted(SUPPORTED_EXTENSIONS)}",
         )
 
-    # Read file
     file_bytes = await file.read()
 
-    # Validate file size
     if not validate_file_size(len(file_bytes), settings.max_file_size_mb):
         raise HTTPException(
             status_code=400,
@@ -37,7 +39,10 @@ async def classify_single_file(file: UploadFile = File(...)):
         )
 
     try:
-        result = classify_file(file_bytes, file.filename or "unknown")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, classify_file, file_bytes, file.filename or "unknown"
+        )
         return ClassificationResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -52,12 +57,13 @@ async def classify_single_file(file: UploadFile = File(...)):
     responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
 )
 async def classify_batch(files: list[UploadFile] = File(...)):
-    if len(files) > 20:
-        raise HTTPException(status_code=400, detail="Maximum 20 files per batch request")
+    if len(files) > 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 files per batch request")
 
     start_time = time.time()
-    results = []
 
+    # Read all files first
+    file_data = []
     for file in files:
         ext = Path(file.filename or "").suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
@@ -65,16 +71,27 @@ async def classify_batch(files: list[UploadFile] = File(...)):
             continue
 
         file_bytes = await file.read()
-
         if not validate_file_size(len(file_bytes), settings.max_file_size_mb):
             logger.warning("Skipping oversized file", filename=file.filename)
             continue
 
-        try:
-            result = classify_file(file_bytes, file.filename or "unknown")
+        file_data.append((file_bytes, file.filename or "unknown"))
+
+    # Classify all files in parallel using thread pool
+    loop = asyncio.get_event_loop()
+    tasks = [
+        loop.run_in_executor(_executor, classify_file, fb, fn)
+        for fb, fn in file_data
+    ]
+
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = []
+    for (_, fn), result in zip(file_data, raw_results):
+        if isinstance(result, Exception):
+            logger.error("Classification failed for file", filename=fn, error=str(result))
+        else:
             results.append(ClassificationResponse(**result))
-        except Exception as e:
-            logger.error("Classification failed for file", filename=file.filename, error=str(e))
 
     total_ms = int((time.time() - start_time) * 1000)
 

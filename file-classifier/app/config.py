@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     confidence_threshold: float = Field(default=0.75)
     max_content_tokens: int = Field(default=6000)
     max_file_size_mb: int = Field(default=50)
+    batch_concurrency: int = Field(default=5, description="Max parallel LLM calls for batch endpoint")
 
     # Server
     host: str = Field(default="0.0.0.0")

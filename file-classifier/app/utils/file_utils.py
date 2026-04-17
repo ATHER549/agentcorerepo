@@ -12,6 +12,8 @@ SUPPORTED_EXTENSIONS = {
     ".pptx", ".ppt",
     # Text
     ".txt",
+    # HTML
+    ".html", ".htm",
     # Images
     ".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp",
 }
@@ -22,10 +24,12 @@ EXTENSION_TO_TYPE = {
     ".csv": "csv",
     ".pdf": "pdf",
     ".docx": "word",
-    ".doc": "word",
+    ".doc": "legacy_doc",
     ".pptx": "pptx",
-    ".ppt": "pptx",
+    ".ppt": "legacy_doc",
     ".txt": "text",
+    ".html": "html",
+    ".htm": "html",
     ".png": "image",
     ".jpg": "image",
     ".jpeg": "image",

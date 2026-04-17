@@ -47,10 +47,13 @@ class ExcelExtractor(BaseExtractor):
                 parts.append(f"### Sheet: {sheet} (failed to read: {e})")
                 continue
 
-            non_empty_rows = df_raw.dropna(how="all").shape[0]
+            # Drop fully empty rows and columns to reduce token waste
+            df_raw = df_raw.dropna(how="all").reset_index(drop=True)
+            df_raw = df_raw.dropna(axis=1, how="all")
+            non_empty_rows = len(df_raw)
             total_rows += non_empty_rows
 
-            if idx < MAX_SHEETS_DETAILED:
+            if idx < MAX_SHEETS_DETAILED and non_empty_rows > 0:
                 parts.append(f"### Sheet {idx + 1}: '{sheet}'")
                 parts.append(f"Non-empty rows in sample: {non_empty_rows}")
 
