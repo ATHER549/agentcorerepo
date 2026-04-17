@@ -1,11 +1,16 @@
 import io
+import base64
+import zipfile
 import structlog
 from docx import Document
+from PIL import Image
 from app.extractors.base import BaseExtractor, ExtractionResult
 
 logger = structlog.get_logger()
 
 MAX_PARAGRAPHS = 200
+MIN_TEXT_LENGTH = 50
+MAX_IMAGE_DIMENSION = 2048
 
 
 class WordExtractor(BaseExtractor):
@@ -53,7 +58,51 @@ class WordExtractor(BaseExtractor):
 
         text = "\n\n".join(parts)
 
+        # If extracted text is minimal, the doc is likely image-based (scanned form embedded as image)
+        if len(text.strip()) < MIN_TEXT_LENGTH:
+            logger.info("Word doc has minimal text, attempting image extraction", filename=filename)
+            image_b64 = self._extract_first_embedded_image(file_bytes)
+            if image_b64:
+                return ExtractionResult(
+                    text_content="[Word document is image-based - content sent as image for visual analysis]",
+                    metadata={
+                        "paragraphs_extracted": para_count,
+                        "tables_found": len(doc.tables),
+                        "extraction_method": "image",
+                    },
+                    is_image_based=True,
+                    image_base64=image_b64,
+                )
+
         return ExtractionResult(
             text_content=text,
             metadata={"paragraphs_extracted": para_count, "tables_found": len(doc.tables)},
         )
+
+    def _extract_first_embedded_image(self, file_bytes: bytes) -> str | None:
+        """Pull the first usable image out of the docx archive and return as base64 PNG."""
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+                image_names = sorted(
+                    [n for n in z.namelist() if n.startswith("word/media/")]
+                )
+                if not image_names:
+                    return None
+
+                # Pick the largest image (most likely to be the main scanned page)
+                largest = max(image_names, key=lambda n: z.getinfo(n).file_size)
+                with z.open(largest) as f:
+                    img_bytes = f.read()
+
+            img = Image.open(io.BytesIO(img_bytes))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            if max(img.size) > MAX_IMAGE_DIMENSION:
+                img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.LANCZOS)
+
+            out = io.BytesIO()
+            img.save(out, format="PNG")
+            return base64.b64encode(out.getvalue()).decode("utf-8")
+        except Exception as e:
+            logger.warning("Failed to extract embedded image from docx", error=str(e))
+            return None

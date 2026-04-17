@@ -19,8 +19,8 @@ class Settings(BaseSettings):
     openai_mini_model: str = Field(default="gpt-4o-mini")
 
     # Classification
-    confidence_threshold: float = Field(default=0.7)
-    max_content_tokens: int = Field(default=3500)
+    confidence_threshold: float = Field(default=0.75)
+    max_content_tokens: int = Field(default=6000)
     max_file_size_mb: int = Field(default=50)
 
     # Server

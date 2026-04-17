@@ -8,6 +8,8 @@ SUPPORTED_EXTENSIONS = {
     ".pdf",
     # Word
     ".docx", ".doc",
+    # PowerPoint
+    ".pptx", ".ppt",
     # Text
     ".txt",
     # Images
@@ -21,6 +23,8 @@ EXTENSION_TO_TYPE = {
     ".pdf": "pdf",
     ".docx": "word",
     ".doc": "word",
+    ".pptx": "pptx",
+    ".ppt": "pptx",
     ".txt": "text",
     ".png": "image",
     ".jpg": "image",

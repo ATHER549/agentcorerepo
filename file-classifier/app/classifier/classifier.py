@@ -10,7 +10,7 @@ from app.utils.token_utils import truncate_to_token_limit
 
 logger = structlog.get_logger()
 
-VALID_CLASSIFICATIONS = {"Quotation", "MBPC", "Other"}
+VALID_CLASSIFICATIONS = {"RFQ", "Quotation", "MPBC", "BER", "E-Auction", "Other"}
 
 
 def classify_file(file_bytes: bytes, filename: str) -> dict:
@@ -23,16 +23,26 @@ def classify_file(file_bytes: bytes, filename: str) -> dict:
     # Step 2: Extract content
     extractor = get_extractor(file_type)
     extraction = extractor.extract(file_bytes, filename)
-    logger.info("Content extracted", filename=filename, is_image=extraction.is_image_based)
+    logger.info(
+        "Content extracted",
+        filename=filename,
+        is_image=extraction.is_image_based,
+        metadata=extraction.metadata,
+    )
 
-    # Step 3: Classify
+    # Step 3: Classify with mini model first
     result = _classify_with_llm(extraction, filename, file_type, use_mini=True)
 
-    # Step 4: If low confidence, escalate to stronger model
-    if result.get("confidence", 0) < settings.confidence_threshold:
+    # Step 4: Escalate to full model if confidence is low OR if mini predicted "Other" with weak signal
+    needs_escalation = (
+        result.get("confidence", 0) < settings.confidence_threshold
+        or result.get("classification") == "Other" and result.get("confidence", 0) < 0.85
+    )
+    if needs_escalation:
         logger.info(
-            "Low confidence, escalating to stronger model",
+            "Escalating to stronger model",
             confidence=result.get("confidence"),
+            classification=result.get("classification"),
             filename=filename,
         )
         result = _classify_with_llm(extraction, filename, file_type, use_mini=False)
@@ -47,6 +57,9 @@ def classify_file(file_bytes: bytes, filename: str) -> dict:
         "classification": result["classification"],
         "confidence": result["confidence"],
         "reason": result["reason"],
+        "key_signals": result["key_signals"],
+        "fields_matched": result["fields_matched"],
+        "fields_missing": result["fields_missing"],
         "processing_time_ms": elapsed_ms,
     }
 
@@ -93,8 +106,16 @@ def _validate_result(result: dict) -> dict:
 
     reason = result.get("reason", "No reason provided")
 
+    def _sanitize_list(val, limit):
+        if not isinstance(val, list):
+            return []
+        return [str(s) for s in val][:limit]
+
     return {
         "classification": classification,
         "confidence": round(confidence, 3),
         "reason": reason,
+        "key_signals": _sanitize_list(result.get("key_signals"), 5),
+        "fields_matched": _sanitize_list(result.get("fields_matched"), 15),
+        "fields_missing": _sanitize_list(result.get("fields_missing"), 15),
     }

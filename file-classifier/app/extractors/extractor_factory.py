@@ -4,6 +4,7 @@ from app.extractors.pdf_extractor import PdfExtractor
 from app.extractors.word_extractor import WordExtractor
 from app.extractors.text_extractor import TextExtractor
 from app.extractors.image_extractor import ImageExtractor
+from app.extractors.pptx_extractor import PptxExtractor
 
 _EXTRACTORS: dict[str, BaseExtractor] = {
     "excel": ExcelExtractor(),
@@ -12,6 +13,7 @@ _EXTRACTORS: dict[str, BaseExtractor] = {
     "word": WordExtractor(),
     "text": TextExtractor(),
     "image": ImageExtractor(),
+    "pptx": PptxExtractor(),
 }
 
 
