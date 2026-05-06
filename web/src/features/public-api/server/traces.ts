@@ -271,7 +271,8 @@ async function buildTracesBaseQuery(
       t.public as public,
       t.tags as tags,
       t.created_at as created_at,
-      t.updated_at as updated_at`;
+      t.updated_at as updated_at,
+      t.metadata as metadata`;
 
   const scoresSelect = select.includeScores ? ", s.score_ids as scores" : "";
   const observationsSelect = select.includeObservations

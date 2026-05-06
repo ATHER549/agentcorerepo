@@ -8,6 +8,9 @@ const defaultRedisOptions: Partial<RedisOptions> = {
   enableReadyCheck: true,
   maxRetriesPerRequest: null,
   enableAutoPipelining: env.REDIS_ENABLE_AUTO_PIPELINING === "true",
+  // Azure Managed Redis closes idle TCP sessions after ~10 min. A short
+  // keepAlive prevents the socket from going dead between token refreshes.
+  keepAlive: 30000,
   // keyPrefix removed - BullMQ uses its own prefix option
 };
 
@@ -230,22 +233,35 @@ const applyAzureManagedRedisTokenToClient = async (
     const authPromises = client.nodes("all").map(async (node) => {
       node.options.username = username;
       node.options.password = accessToken.token;
+      // Skip live AUTH if the underlying socket isn't writable. The
+      // updated options.password ensures ioredis re-auths automatically
+      // when the connection next reaches the "ready" state.
+      if (node.status !== "ready") {
+        return;
+      }
       try {
         await node.call("AUTH", username!, accessToken.token);
       } catch (error) {
-        logger.warn("Failed to AUTH on cluster node, will reconnect", error);
-        node.disconnect(true);
+        logger.debug(
+          "In-place AUTH on cluster node failed; relying on reconnect",
+          error,
+        );
       }
     });
     await Promise.all(authPromises);
   } else {
     client.options.username = username;
     client.options.password = accessToken.token;
+    if (client.status !== "ready") {
+      return;
+    }
     try {
       await client.call("AUTH", username!, accessToken.token);
     } catch (error) {
-      logger.warn("Failed to AUTH on Redis client, will reconnect", error);
-      client.disconnect(true);
+      logger.debug(
+        "In-place AUTH on Redis client failed; relying on reconnect",
+        error,
+      );
     }
   }
 };
