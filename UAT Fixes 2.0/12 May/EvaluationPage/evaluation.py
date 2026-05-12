@@ -5693,6 +5693,48 @@ async def list_evaluation_models(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _infer_input_type_from_nodes(graph_data: dict | None) -> str | None:
+    """Mirror of api/publish.py's publish-time `_input_type` derivation.
+
+    Used as a fallback inside `_agent_to_payload` / `_deploy_to_payload` when
+    the persisted `_input_type` is missing — which is always the case for
+    draft (never-published) agents, since the stamping happens at publish
+    time. Without this fallback the frontend's Evaluation-page filter
+    (`NON_CHAT_TYPES = {"autonomous", "file_processing"}`) leaves draft
+    non-chat agents in the dropdown.
+
+    Handles both graph shapes used in the codebase:
+      * flat:    {"nodes": [...]}  ← published snapshots
+      * wrapped: {"data": {"nodes": [...]}}  ← draft agent.data from the flow editor
+    Same precedence as processing/process.py:158.
+    """
+    if not isinstance(graph_data, dict):
+        return None
+    nodes = None
+    inner = graph_data.get("data")
+    if isinstance(inner, dict):
+        nodes = inner.get("nodes")
+    if not nodes:
+        nodes = graph_data.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    node_types: set[str] = set()
+    for node in nodes:
+        try:
+            t = node.get("data", {}).get("type")
+        except AttributeError:
+            continue
+        if isinstance(t, str):
+            node_types.add(t)
+    if not node_types:
+        return None
+    if "ChatInput" in node_types:
+        return "chat"
+    if node_types & {"FolderMonitor", "FileTrigger"}:
+        return "file_processing"
+    return "autonomous"
+
+
 def _agent_to_payload(agent_obj, *, environment: str | None = None) -> dict:
     """Convert an Agent (or deployment record) into the normalised model payload."""
     updated = agent_obj.updated_at
@@ -5709,9 +5751,13 @@ def _agent_to_payload(agent_obj, *, environment: str | None = None) -> dict:
         else AccessTypeEnum.PRIVATE.value
     )
     # Read _input_type from agent data (legacy agents from base table).
-    # Returns None when not set — frontend will treat missing as "show".
+    # If the field is missing (draft / unpublished agent, since stamping only
+    # happens at publish time), infer it from the node graph so the frontend
+    # filter can correctly hide non-chat agents.
     agent_data = getattr(agent_obj, "data", None) or {}
-    input_type = agent_data.get("_input_type", None)
+    input_type = agent_data.get("_input_type")
+    if input_type is None:
+        input_type = _infer_input_type_from_nodes(agent_data)
     return {
         "id": f"lb:{model_id}",
         "name": agent_obj.name,
@@ -5750,9 +5796,11 @@ def _deploy_to_payload(deploy_rec, *, environment: str) -> dict:
     agent_id = str(deploy_rec.agent_id)
     # Read _input_type from the deployment snapshot (set at publish time).
     # Same field used by the Agent Control Panel to classify agents.
-    # Returns None when not set — frontend will treat missing as "show".
+    # If missing (pre-fix snapshots), infer from the snapshot's node graph.
     snap = getattr(deploy_rec, "agent_snapshot", None) or {}
-    input_type = snap.get("_input_type", None)
+    input_type = snap.get("_input_type")
+    if input_type is None:
+        input_type = _infer_input_type_from_nodes(snap)
     return {
         "id": f"lb:{agent_id}",
         "name": deploy_rec.agent_name or agent_id,
